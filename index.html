@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>บันทึกการมาสาย ม.4</title>
+<style>
+:root{
+  --bg:#f4f6fb; --card:#fff; --line:#dfe3ec; --ink:#1e2430; --muted:#6b7385;
+  --accent:#2b59c3; --accent2:#e8eefc; --red:#c62828; --green:#1b7f4b;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:"TH SarabunPSK","TH Sarabun New","Sarabun","Segoe UI",Tahoma,sans-serif;font-size:19px}
+header{background:var(--accent);color:#fff;padding:10px 14px;position:sticky;top:0;z-index:20;
+  display:flex;flex-wrap:wrap;gap:10px;align-items:center;box-shadow:0 2px 6px rgba(0,0,0,.15)}
+header h1{font-size:22px;margin:0;font-weight:700;letter-spacing:.2px}
+header .sp{flex:1}
+.badge{background:rgba(255,255,255,.18);padding:3px 10px;border-radius:20px;font-size:16px}
+nav{display:flex;gap:4px;background:#fff;padding:6px 10px;border-bottom:1px solid var(--line);
+  position:sticky;top:47px;z-index:19;overflow-x:auto}
+nav button{border:0;background:transparent;padding:8px 14px;border-radius:8px;cursor:pointer;
+  font-family:inherit;font-size:19px;color:var(--muted);white-space:nowrap}
+nav button.on{background:var(--accent2);color:var(--accent);font-weight:700}
+main{padding:14px;max-width:1120px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+label.f{display:flex;flex-direction:column;gap:3px;font-size:16px;color:var(--muted)}
+input,select,textarea,button.btn{font-family:inherit;font-size:19px;padding:6px 10px;border:1px solid var(--line);
+  border-radius:8px;background:#fff;color:var(--ink)}
+input[type=number]{width:90px}
+button.btn{cursor:pointer;background:#fff}
+button.btn:hover{background:#f0f3fa}
+button.btn.pri{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:700}
+button.btn.pri:hover{filter:brightness(1.08)}
+button.btn.warn{color:var(--red);border-color:#f0c9c9}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{border:0;background:#fff;padding:8px 16px;cursor:pointer;font-family:inherit;font-size:19px;color:var(--muted)}
+.seg button.on{background:var(--accent);color:#fff;font-weight:700}
+.rooms{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.rooms button{min-width:66px;padding:8px 10px;border:1px solid var(--line);background:#fff;border-radius:10px;
+  cursor:pointer;font-family:inherit;font-size:18px;position:relative}
+.rooms button.on{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:700}
+.rooms button .n{position:absolute;top:-7px;right:-7px;background:var(--red);color:#fff;border-radius:10px;
+  font-size:13px;padding:1px 6px;line-height:1.5}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid var(--line);padding:5px 8px;text-align:center}
+th{background:#f7f9fd;font-weight:700;font-size:17px;color:var(--muted)}
+td.name{text-align:left;white-space:nowrap}
+tr.hit{background:#fff7e6}
+tr.over{background:#ffecec}
+.tick{width:34px;height:34px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
+  border:1.5px solid var(--line);border-radius:8px;background:#fff;font-size:20px;color:transparent;user-select:none}
+.tick.on{background:var(--green);border-color:var(--green);color:#fff}
+td.tk{padding:3px}
+.tot{font-weight:700}
+.tot.hi{color:var(--red)}
+.hint{color:var(--muted);font-size:16px;line-height:1.55}
+.wrap{overflow-x:auto}
+#preview{background:#fff;padding:24px;border:1px solid var(--line);border-radius:8px}
+#preview .ptitle{text-align:center;font-weight:700;font-size:26px;line-height:1.35}
+#preview .pnote{margin-top:10px}
+#preview table{margin-top:10px}
+#preview th,#preview td{border:1px solid #000;padding:4px 8px}
+#preview .sign{margin-top:26px;margin-left:52%}
+@media print{
+  header,nav,.noprint{display:none!important}
+  body{background:#fff;font-size:16pt}
+  main{padding:0;max-width:none}
+  .card{border:0;padding:0;margin:0}
+  #preview{border:0;padding:0}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>บันทึกการมาสาย ม.4</h1>
+  <span class="badge" id="hdWeek">สัปดาห์ที่ –</span>
+  <span class="badge" id="hdSess">สาย 07.50 น.</span>
+  <span class="sp"></span>
+  <span class="badge">บันทึกอัตโนมัติ</span>
+</header>
+<nav>
+  <button data-tab="rec" class="on">① ติ๊กมาสาย</button>
+  <button data-tab="sum">② สรุป &amp; พิมพ์ Word</button>
+  <button data-tab="carry">ยอดยกมา</button>
+  <button data-tab="roster">รายชื่อนักเรียน</button>
+  <button data-tab="data">ข้อมูล / สำรอง</button>
+</nav>
+<main>
+
+<!-- ===== TAB: RECORD ===== -->
+<section id="tab-rec">
+  <div class="card">
+    <div class="row">
+      <label class="f">สัปดาห์ที่
+        <input type="number" id="wkNo" min="1" max="45" step="1" style="width:80px">
+      </label>
+      <label class="f">วันจันทร์ของสัปดาห์
+        <input type="date" id="wkStart">
+      </label>
+      <label class="f">ช่วงวันที่ (แก้ข้อความได้)
+        <input type="text" id="wkLabel" style="width:260px" placeholder="10 – 14 สิงหาคม 2569">
+      </label>
+      <div class="seg" id="segSess">
+        <button data-s="0750" class="on">สาย 07.50 น.</button>
+        <button data-s="0830">สาย 08.30 น.</button>
+      </div>
+    </div>
+    <div class="rooms" id="rooms"></div>
+    <div class="row" style="margin-bottom:8px">
+      <label class="f">ค้นหาชื่อ (ทุกห้อง)
+        <input type="text" id="q" placeholder="พิมพ์ชื่อ / นามสกุล" style="width:280px">
+      </label>
+      <span class="hint" id="recInfo"></span>
+    </div>
+    <div class="wrap"><table id="tblRec"></table></div>
+  </div>
+</section>
+
+<!-- ===== TAB: SUMMARY ===== -->
+<section id="tab-sum" hidden>
+  <div class="card noprint">
+    <div class="row">
+      <div class="seg" id="segSess2">
+        <button data-s="0750" class="on">สาย 07.50 น.</button>
+        <button data-s="0830">สาย 08.30 น.</button>
+      </div>
+      <label class="f">เกณฑ์ (ครั้งขึ้นไป)
+        <input type="number" id="thr" min="1" step="1" value="4">
+      </label>
+      <label class="f">
+        <span style="font-size:17px;color:var(--ink)"><input type="checkbox" id="chkNote" checked> ใส่บรรทัดหมายเหตุเกณฑ์</span>
+      </label>
+      <button class="btn pri" id="btnDocx">⬇ ดาวน์โหลด Word (.docx)</button>
+      <button class="btn" id="btnDocxBoth">⬇ ทั้ง 2 ช่วงเวลา</button>
+      <button class="btn" id="btnPrint">🖨 พิมพ์</button>
+    </div>
+    <p class="hint" id="sumInfo"></p>
+  </div>
+  <div class="card"><div id="preview"></div></div>
+</section>
+
+<!-- ===== TAB: CARRY ===== -->
+<section id="tab-carry" hidden>
+  <div class="card">
+    <p class="hint">ใส่ “ยอดสะสมเดิม” ของนักเรียนที่มาสายมาก่อนเริ่มใช้โปรแกรมนี้ (เช่น ยอดถึงสัปดาห์ที่ 12 จากสมุดบันทึก)
+      โปรแกรมจะนำไปบวกกับจำนวนครั้งที่ติ๊กในโปรแกรม</p>
+    <div class="row">
+      <div class="seg" id="segSess3">
+        <button data-s="0750" class="on">สาย 07.50 น.</button>
+        <button data-s="0830">สาย 08.30 น.</button>
+      </div>
+      <label class="f">ห้อง
+        <select id="carryRoom"></select>
+      </label>
+      <label class="f">ค้นหาชื่อ
+        <input type="text" id="carryQ" style="width:240px">
+      </label>
+      <button class="btn warn" id="btnCarryClear">ล้างยอดยกมาของช่วงเวลานี้</button>
+    </div>
+    <div class="wrap"><table id="tblCarry"></table></div>
+  </div>
+</section>
+
+<!-- ===== TAB: ROSTER ===== -->
+<section id="tab-roster" hidden>
+  <div class="card">
+    <p class="hint" id="rosterInfo"></p>
+    <div class="row">
+      <label class="f">ห้อง<input type="number" id="adRoom" min="1" style="width:80px"></label>
+      <label class="f">เลขที่<input type="number" id="adNo" min="1" style="width:90px"></label>
+      <label class="f">ชื่อ-สกุล<input type="text" id="adName" style="width:300px" placeholder="นางสาว…"></label>
+      <button class="btn pri" id="btnAdd">เพิ่ม / แก้ไขรายชื่อ</button>
+    </div>
+    <hr style="border:0;border-top:1px solid var(--line);margin:14px 0">
+    <p class="hint">วางรายชื่อจาก Excel ได้ (คัดลอกแล้ววาง) — 1 บรรทัดต่อ 1 คน รูปแบบ:
+      <b>ห้อง [Tab หรือ ,] เลขที่ [Tab หรือ ,] ชื่อ-สกุล</b></p>
+    <textarea id="paste" rows="6" style="width:100%" placeholder="13&#9;1&#9;นายกิตติพัฒน์ สร้อยวัน"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="btn pri" id="btnMerge">เพิ่ม/อัปเดตจากข้อความ</button>
+      <button class="btn warn" id="btnReplace">แทนที่รายชื่อทั้งหมด</button>
+      <button class="btn" id="btnResetRoster">คืนค่ารายชื่อเริ่มต้น</button>
+    </div>
+    <div class="wrap" style="margin-top:12px;max-height:420px;overflow:auto"><table id="tblRoster"></table></div>
+  </div>
+</section>
+
+<!-- ===== TAB: DATA ===== -->
+<section id="tab-data" hidden>
+  <div class="card">
+    <h3 style="margin:0 0 8px">ข้อความท้ายเอกสาร</h3>
+    <div class="row">
+      <label class="f">ชื่อผู้ลงนาม<input type="text" id="signer" style="width:260px"></label>
+      <label class="f">ตำแหน่ง<input type="text" id="position" style="width:380px"></label>
+      <label class="f">ระดับชั้น ม.<input type="text" id="level" style="width:70px"></label>
+    </div>
+  </div>
+  <div class="card">
+    <h3 style="margin:0 0 8px">สำรอง / ย้ายข้อมูล</h3>
+    <p class="hint">ข้อมูลเก็บในเบราว์เซอร์เครื่องนี้ (localStorage) — ควรกด “สำรองข้อมูล” เก็บไฟล์ไว้เป็นระยะ
+      และถ้าจะใช้อีกเครื่องให้ใช้ “นำเข้าข้อมูล”</p>
+    <div class="row">
+      <button class="btn pri" id="btnExport">⬇ สำรองข้อมูล (.json)</button>
+      <label class="btn" style="cursor:pointer">⬆ นำเข้าข้อมูล (.json)<input type="file" id="fileImp" accept=".json" hidden></label>
+      <button class="btn warn" id="btnWipe">ล้างข้อมูลทั้งหมด</button>
+    </div>
+  </div>
+  <div class="card">
+    <h3 style="margin:0 0 8px">สัปดาห์ที่บันทึกไว้</h3>
+    <div class="wrap"><table id="tblWeeks"></table></div>
+  </div>
+</section>
+
+</main>
+<script src="students.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
