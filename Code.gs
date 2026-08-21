@@ -25,7 +25,7 @@ var SH_META = 'meta';
 
 var HEAD_STUDENTS = ['ห้อง', 'เลขที่', 'เลขประจำตัว', 'ชื่อ-สกุล'];
 var HEAD_LATE = ['ช่วงเวลา', 'สัปดาห์ที่', 'วันจันทร์', 'ช่วงวันที่', 'ห้อง', 'เลขที่', 'ชื่อ-สกุล',
-  'จ', 'อ', 'พ', 'พฤ', 'ศ', 'รวมสัปดาห์นี้'];
+  'จำนวนครั้ง'];
 var HEAD_CARRY = ['ช่วงเวลา', 'ห้อง', 'เลขที่', 'ชื่อ-สกุล', 'ยอดยกมา'];
 var HEAD_META = ['key', 'value'];
 
@@ -151,10 +151,9 @@ function loadAll_() {
     iso = String(iso).slice(0, 10);
     if (!weeks[iso]) weeks[iso] = { no: String(vl[i][1] || ''), label: String(vl[i][3] || ''), marks: { '0750': {}, '0830': {} } };
     if (!weeks[iso].marks[sess]) weeks[iso].marks[sess] = {};
-    var days = [];
-    for (var d = 0; d < 5; d++) days.push(String(vl[i][7 + d] || '').trim() !== '');
-    if (days.indexOf(true) < 0) continue;
-    weeks[iso].marks[sess][key_(Number(vl[i][4]), Number(vl[i][5]))] = days;
+    var cnt = Number(vl[i][7] || 0);
+    if (!cnt) continue;
+    weeks[iso].marks[sess][key_(Number(vl[i][4]), Number(vl[i][5]))] = cnt;
   }
 
   var signers = [];
@@ -209,13 +208,15 @@ function saveAll_(data, baseRev, force) {
       ['0750', '0830'].forEach(function (sess) {
         var m = (w.marks || {})[sess] || {};
         Object.keys(m).forEach(function (k) {
-          var days = m[k] || [];
-          var cnt = days.filter(function (x) { return x; }).length;
+          var cnt = m[k];
+          // รองรับข้อมูลรูปแบบเก่าที่เป็นการติ๊กรายวัน
+          if (Object.prototype.toString.call(cnt) === '[object Array]') {
+            cnt = cnt.filter(function (x) { return x; }).length;
+          }
+          cnt = Number(cnt || 0);
           if (!cnt) return;
           var p = k.split('-');
-          rows.push([sess, w.no || '', iso, w.label || '', Number(p[0]), Number(p[1]), nameOf[k] || '',
-            days[0] ? '✓' : '', days[1] ? '✓' : '', days[2] ? '✓' : '',
-            days[3] ? '✓' : '', days[4] ? '✓' : '', cnt]);
+          rows.push([sess, w.no || '', iso, w.label || '', Number(p[0]), Number(p[1]), nameOf[k] || '', cnt]);
         });
       });
     });

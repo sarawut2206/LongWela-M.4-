@@ -5,7 +5,6 @@
 
 const KEY = 'malaisai_m4_v2';
 const SESS = { '0750': '07.50', '0830': '08.30' };
-const DAYNAME = ['จ', 'อ', 'พ', 'พฤ', 'ศ'];
 const TH_MONTH = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
   'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
 
@@ -29,7 +28,7 @@ function blank() {
     sess: '0750',
     cur: mondayISO(new Date()),
     room: null,
-    weeks: {},          // isoMonday -> { no, label, marks:{ '0750':{key:[5 bools]}, '0830':{} } }
+    weeks: {},          // isoMonday -> { no, label, marks:{ '0750':{ 'ห้อง-เลขที่': จำนวนครั้ง }, '0830':{} } }
     carry: baselineCarry(),   // เริ่มต้น = ยอดสะสมถึงสัปดาห์ที่ 12 จากไฟล์ Word เดิม
     roster: null,       // null = ใช้รายชื่อจาก students.js
     cloud: { url: GS_URL_DEFAULT, auto: true, rev: 0, at: '' },
@@ -56,6 +55,12 @@ function load() {
     if (s.roster && s.rosterVer !== window.ROSTER_VERSION) { s.roster = null; s.rosterVer = null; }
     s.carry = Object.assign({ '0750': {}, '0830': {} }, s.carry || {});
     s.cloud = Object.assign({ url: GS_URL_DEFAULT, auto: true, rev: 0, at: '' }, s.cloud || {});
+    // ข้อมูลรูปแบบเก่า (ติ๊กรายวัน 5 ช่อง) -> แปลงเป็นจำนวนครั้ง
+    Object.values(s.weeks || {}).forEach(w => ['0750', '0830'].forEach(se => {
+      const m = (w.marks || {})[se]; if (!m) return;
+      Object.keys(m).forEach(k => { if (Array.isArray(m[k])) m[k] = m[k].filter(Boolean).length || undefined; });
+      Object.keys(m).forEach(k => { if (!m[k]) delete m[k]; });
+    }));
     return s;
   } catch (e) { return blank(); }
 }
@@ -105,9 +110,11 @@ function marks(isoStart, sess) {
   if (!w.marks[sess]) w.marks[sess] = {};
   return w.marks[sess];
 }
+/* จำนวนครั้งที่สายในสัปดาห์นั้น (เก็บเป็นตัวเลขล้วน ไม่ผูกกับวัน) */
 function weekCount(isoStart, sess, k) {
   const m = (S.weeks[isoStart]?.marks?.[sess] || {})[k];
-  return m ? m.filter(Boolean).length : 0;
+  if (Array.isArray(m)) return m.filter(Boolean).length;   // ข้อมูลรูปแบบเก่า
+  return Number(m || 0);
 }
 /* จำนวนครั้งสะสม = ยอดยกมา + ทุกสัปดาห์ที่วันที่ <= สัปดาห์ที่เลือก */
 function total(sess, k, uptoISO) {
@@ -118,12 +125,27 @@ function total(sess, k, uptoISO) {
   }
   return t;
 }
-function isMarked(k, di) { return !!(marks(S.cur, S.sess)[k] || [])[di]; }
-function toggle(k, di) {
+/* ยอดสะสม "ก่อน" สัปดาห์ที่กำลังบันทึก = ยอดยกมา + สัปดาห์ที่เก่ากว่า */
+function prevTotal(sess, k) {
+  let t = Number(S.carry[sess]?.[k] || 0);
+  for (const wk of weekList()) if (wk < S.cur) t += weekCount(wk, sess, k);
+  return t;
+}
+/* ตั้งจำนวนครั้งของสัปดาห์นี้ */
+function setCount(k, n) {
   const m = marks(S.cur, S.sess);
-  if (!m[k]) m[k] = [false, false, false, false, false];
-  m[k][di] = !m[k][di];
-  if (!m[k].some(Boolean)) delete m[k];
+  n = Math.max(0, Math.min(99, Math.round(Number(n) || 0)));
+  if (n) m[k] = n; else delete m[k];
+  save();
+}
+function addCount(k, d) { setCount(k, weekCount(S.cur, S.sess, k) + d); }
+/* ตั้ง "ยอดก่อนสัปดาห์นี้" โดยปรับที่ยอดยกมาให้ผลรวมออกมาตามที่พิมพ์ */
+function setPrev(k, n) {
+  n = Math.max(0, Math.min(999, Math.round(Number(n) || 0)));
+  const fromWeeks = prevTotal(S.sess, k) - Number(S.carry[S.sess]?.[k] || 0);
+  const carry = Math.max(0, n - fromWeeks);
+  if (!S.carry[S.sess]) S.carry[S.sess] = {};
+  if (carry) S.carry[S.sess][k] = carry; else delete S.carry[S.sess][k];
   save();
 }
 
@@ -191,37 +213,51 @@ function renderRec() {
   const list = q
     ? roster().filter(s => s.name.includes(q) || String(s.n) === q)
     : roster().filter(s => s.r === S.room);
-  const mon = parseISO(S.cur);
   const thr = Number(S.meta.thr) || 4;
 
-  let h = '<thead><tr>' + (q ? '<th>ห้อง</th>' : '') + '<th>เลขที่</th><th style="text-align:left">ชื่อ-สกุล</th>';
-  for (let i = 0; i < 5; i++) h += `<th>${DAYNAME[i]}<br><span style="font-weight:400">${addDays(mon, i).getDate()}</span></th>`;
-  h += '<th>สัปดาห์นี้</th><th>รวมสะสม</th></tr></thead><tbody>';
+  let h = '<thead><tr>' + (q ? '<th>ห้อง</th>' : '') +
+    '<th>เลขที่</th><th style="text-align:left">ชื่อ-สกุล</th>' +
+    '<th title="ยอดสะสมก่อนสัปดาห์นี้ — พิมพ์แก้ได้">ยอดเดิม</th>' +
+    '<th>สายสัปดาห์นี้ (ครั้ง)</th>' +
+    '<th>รวมทั้งหมด</th></tr></thead><tbody>';
 
   list.forEach(s => {
     const k = keyOf(s);
+    const base = prevTotal(S.sess, k);
     const wc = weekCount(S.cur, S.sess, k);
-    const tt = total(S.sess, k, S.cur);
+    const tt = base + wc;
     const cls = tt >= thr ? 'over' : (wc ? 'hit' : '');
-    h += `<tr class="${cls}">` + (q ? `<td>${s.r}</td>` : '') + `<td>${s.n}</td><td class="name">${s.name}</td>`;
-    for (let i = 0; i < 5; i++)
-      h += `<td class="tk"><span class="tick ${isMarked(k, i) ? 'on' : ''}" data-k="${k}" data-d="${i}">✓</span></td>`;
-    h += `<td>${wc || ''}</td><td class="tot ${tt >= thr ? 'hi' : ''}">${tt || ''}</td></tr>`;
+    h += `<tr class="${cls}">` + (q ? `<td>${s.r}</td>` : '') +
+      `<td>${s.n}</td><td class="name">${s.name}</td>` +
+      `<td><input class="base" type="number" min="0" inputmode="numeric" value="${base || ''}" data-k="${k}" placeholder="0"></td>` +
+      `<td class="cnt">` +
+      `<button class="stp" data-k="${k}" data-d="-1" ${wc ? '' : 'disabled'}>−</button>` +
+      `<input class="num" type="number" min="0" inputmode="numeric" value="${wc || ''}" data-k="${k}" placeholder="0">` +
+      `<button class="stp add" data-k="${k}" data-d="1">+</button></td>` +
+      `<td class="tot ${tt >= thr ? 'hi' : ''}">${tt || ''}</td></tr>`;
   });
   h += '</tbody>';
   $('#tblRec').innerHTML = h;
 
-  $('#tblRec').querySelectorAll('.tick').forEach(el => el.onclick = () => {
-    toggle(el.dataset.k, Number(el.dataset.d));
-    renderRec();
+  $('#tblRec').querySelectorAll('.stp').forEach(el => el.onclick = () => {
+    addCount(el.dataset.k, Number(el.dataset.d)); renderRec();
+  });
+  $('#tblRec').querySelectorAll('.num').forEach(el => el.onchange = () => {
+    setCount(el.dataset.k, el.value); renderRec();
+  });
+  $('#tblRec').querySelectorAll('.base').forEach(el => el.onchange = () => {
+    setPrev(el.dataset.k, el.value); renderRec();
   });
 
   const m = marks(S.cur, S.sess);
-  const nRoom = roster().filter(s => s.r === S.room && m[keyOf(s)]).length;
+  const nRoom = roster().filter(s => s.r === S.room && weekCount(S.cur, S.sess, keyOf(s))).length;
+  const sumRoom = roster().filter(s => s.r === S.room)
+    .reduce((a, s) => a + weekCount(S.cur, S.sess, keyOf(s)), 0);
   const nAll = Object.keys(m).length;
-  $('#recInfo').textContent = q
+  $('#recInfo').innerHTML = q
     ? `พบ ${list.length} คน`
-    : `ห้อง ${S.room} • ${list.length} คน • สัปดาห์นี้มีคนสาย ${nRoom} คน (รวมทุกห้อง ${nAll} คน)`;
+    : `ห้อง ${S.room} • ${list.length} คน • สัปดาห์นี้สาย <b>${nRoom}</b> คน รวม <b>${sumRoom}</b> ครั้ง` +
+      ` (ทุกห้อง ${nAll} คน) — ช่อง <b>ยอดเดิม</b> พิมพ์แก้ได้ ถ้าเด็กมีสถิติเดิมในสมุดแต่ยังไม่มีในระบบ`;
 }
 
 /* ==========================================================================
