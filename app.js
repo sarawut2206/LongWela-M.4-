@@ -149,6 +149,16 @@ function setPrev(k, n) {
   save();
 }
 
+/* ---------- ข้อความแจ้งผลสั้น ๆ มุมล่าง ---------- */
+let toastTimer = null;
+function toast(msg, bad) {
+  const el = $('#toast'); if (!el) return;
+  el.innerHTML = msg;
+  el.className = 'on' + (bad ? ' bad' : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = ''; }, bad ? 5000 : 2600);
+}
+
 /* ==========================================================================
    TABS
    ========================================================================== */
@@ -265,7 +275,20 @@ function renderRec() {
    ========================================================================== */
 $('#thr').oninput = () => { S.meta.thr = Number($('#thr').value) || 4; save(); renderSummary(); renderRec(); };
 $('#chkNote').onchange = () => { S.meta.note = $('#chkNote').checked; save(); renderSummary(); };
-$('#btnPrint').onclick = () => window.print();
+$('#btnPrint').onclick = () => printReport();
+$('#btnPdf').onclick = () => printReport(true);
+/* พิมพ์ / บันทึกเป็น PDF — ตั้งชื่อไฟล์ให้ตรงกับชื่อเอกสารก่อนสั่งพิมพ์ */
+function printReport(isPdf) {
+  renderSummary();
+  const w = week(S.cur, true);
+  const old = document.title;
+  document.title = `สรุปสาย ${SESS[S.sess]} น. สัปดาห์ที่ ${w.no || ''} ${(w.label || '').replace(/\s*–\s*/g, '-')}`;
+  if (isPdf) toast('ในหน้าต่างที่เปิดขึ้น ให้เลือกเครื่องพิมพ์เป็น <b>Save as PDF / บันทึกเป็น PDF</b>');
+  setTimeout(() => {
+    window.print();
+    setTimeout(() => { document.title = old; }, 800);
+  }, isPdf ? 400 : 0);
+}
 $('#btnDocx').onclick = () => downloadDocx(S.sess);
 $('#btnDocxBoth').onclick = () => { downloadDocx('0750'); setTimeout(() => downloadDocx('0830'), 600); };
 
@@ -461,6 +484,10 @@ function renderData() {
   $('#sg0name').value = S.meta.signers[0].name; $('#sg0pos').value = S.meta.signers[0].pos;
   $('#sg1name').value = S.meta.signers[1].name; $('#sg1pos').value = S.meta.signers[1].pos;
   $('#level').value = S.meta.level;
+  const tot = allSummary();
+  const w = week(S.cur, true);
+  $('#allInfo').innerHTML = `สัปดาห์ที่ ${w.no || '–'} (${w.label}) — สาย <b>${tot.ppl}</b> คน รวม <b>${tot.times}</b> ครั้ง` +
+    (S.cloud.at ? ` • ซิงก์ล่าสุด ${S.cloud.at}` : ' • ยังไม่เคยซิงก์');
   $('#gsUrl').value = S.cloud.url || '';
   $('#chkAuto').checked = !!S.cloud.auto;
   if (S.cloud.at) setCloudInfo('ซิงก์ล่าสุด ' + S.cloud.at + ' • rev ' + S.cloud.rev, '☁ พร้อม');
@@ -565,7 +592,7 @@ function stateForCloud(writeRoster) {
 }
 
 async function cloudPush(force, silent) {
-  if (syncing) return;
+  if (syncing) return false;
   syncing = true;
   $('#hdSync').disabled = true;
   setCloudInfo('กำลังบันทึกขึ้นคลาวด์…', '☁ กำลังบันทึก…');
@@ -574,7 +601,7 @@ async function cloudPush(force, silent) {
     if (res && res.conflict) {
       const ok = confirm('ข้อมูลบนคลาวด์ถูกแก้ไขจากเครื่องอื่น (rev ' + res.rev + ')\n\n' +
         'กด "ตกลง" = ทับด้วยข้อมูลในเครื่องนี้\nกด "ยกเลิก" = ไม่บันทึก (แนะนำให้กด ⬇ ดึงจากคลาวด์ ก่อน)');
-      if (!ok) { setCloudInfo('ยกเลิกการบันทึก — ข้อมูลบนคลาวด์ใหม่กว่า', '☁ ค้าง'); return; }
+      if (!ok) { setCloudInfo('ยกเลิกการบันทึก — ข้อมูลบนคลาวด์ใหม่กว่า', '☁ ค้าง'); return false; }
       res = await cloudPost({ action: 'save', data: stateForCloud(), force: true });
     }
     if (!res || !res.ok) throw new Error((res && res.error) || 'บันทึกไม่สำเร็จ');
@@ -584,6 +611,7 @@ async function cloudPush(force, silent) {
     setCloudInfo(`บันทึกขึ้นคลาวด์แล้ว • rev ${S.cloud.rev} • ${S.cloud.at}` +
       (res.blind ? ' <b>(ส่งแบบไม่อ่านผลตอบกลับ — ลองกด “ดึงจากคลาวด์” เพื่อตรวจ)</b>' : ''),
       '☁ บันทึกแล้ว');
+    return true;
   } catch (e) {
     setCloudInfo('<b style="color:#c62828">บันทึกไม่สำเร็จ:</b> ' + e.message +
       ' — ตรวจว่า Deploy เป็น “Anyone” และลิงก์ลงท้ายด้วย /exec', '☁ ผิดพลาด');
@@ -633,6 +661,50 @@ function autoSync() {
   clearTimeout(syncTimer);
   setCloudInfo('มีการแก้ไข — จะบันทึกขึ้นคลาวด์ใน 5 วินาที', '☁ รอบันทึก…');
   syncTimer = setTimeout(() => cloudPush(false, true), 5000);
+}
+
+/* สรุปยอดของห้องหนึ่งในสัปดาห์ที่กำลังบันทึก */
+function roomSummary(r) {
+  const list = roster().filter(s => s.r === r);
+  let ppl = 0, times = 0;
+  list.forEach(s => { const c = weekCount(S.cur, S.sess, keyOf(s)); if (c) { ppl++; times += c; } });
+  return { ppl, times };
+}
+
+/* 💾 บันทึกห้องนี้ — เซฟลงเครื่อง แล้วส่งขึ้น Google Sheet (ถ้าตั้งลิงก์ไว้) */
+$('#btnSaveRoom').onclick = async () => {
+  clearTimeout(syncTimer);                       // ไม่ต้องรอซิงก์อัตโนมัติ
+  localStorage.setItem(KEY, JSON.stringify(S));
+  const s = roomSummary(S.room);
+  const head = `บันทึกห้อง ${S.room} แล้ว — สาย <b>${s.ppl}</b> คน รวม <b>${s.times}</b> ครั้ง`;
+  if (!cloudUrl()) { toast(head + ' (เก็บในเครื่อง)'); return; }
+  toast(head + ' • กำลังส่งขึ้น Google Sheet…');
+  const ok = await cloudPush(false, true);
+  toast(ok ? head + ' • ขึ้น Google Sheet แล้ว ✓'
+           : head + ' • <b>ส่งขึ้นคลาวด์ไม่สำเร็จ</b> (ข้อมูลยังอยู่ในเครื่องครบ)', !ok);
+};
+
+/* 💾 บันทึกทุกห้อง (หน้าสุดท้าย) */
+$('#btnSaveAll').onclick = async () => {
+  clearTimeout(syncTimer);
+  localStorage.setItem(KEY, JSON.stringify(S));
+  const tot = allSummary();
+  const head = `บันทึกทุกห้องแล้ว — สัปดาห์นี้ สาย <b>${tot.ppl}</b> คน รวม <b>${tot.times}</b> ครั้ง`;
+  if (!cloudUrl()) { toast(head + ' (เก็บในเครื่อง)'); return; }
+  toast(head + ' • กำลังส่งขึ้น Google Sheet…');
+  const ok = await cloudPush(false, true);
+  toast(ok ? head + ' • ขึ้น Google Sheet แล้ว ✓'
+           : head + ' • <b>ส่งขึ้นคลาวด์ไม่สำเร็จ</b> (ข้อมูลยังอยู่ในเครื่องครบ)', !ok);
+  renderData();
+};
+
+function allSummary() {
+  let ppl = 0, times = 0;
+  ['0750', '0830'].forEach(se => {
+    const m = (S.weeks[S.cur] || {}).marks ? S.weeks[S.cur].marks[se] || {} : {};
+    Object.keys(m).forEach(k => { ppl++; times += weekCount(S.cur, se, k); });
+  });
+  return { ppl, times };
 }
 
 $('#hdSync').onclick = () => cloudPush(false);

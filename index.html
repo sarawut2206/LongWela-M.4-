@@ -81,6 +81,13 @@ input.num,input.base{-moz-appearance:textfield}
 #preview table{margin-top:10px}
 #preview th,#preview td{border:1px solid #000;padding:4px 8px}
 #preview .sign{margin-top:26px;margin-left:52%}
+button.btn.big{font-size:20px;padding:9px 18px}
+#toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(80px);
+  background:#22303f;color:#fff;padding:11px 22px;border-radius:24px;font-size:18px;z-index:60;
+  box-shadow:0 6px 20px rgba(0,0,0,.28);opacity:0;transition:.25s;pointer-events:none;max-width:90vw;text-align:center}
+#toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+#toast.bad{background:#a32020}
+@page{size:A4;margin:2.54cm}
 @media print{
   header,nav,.noprint{display:none!important}
   body{background:#fff;font-size:16pt}
@@ -127,6 +134,8 @@ input.num,input.base{-moz-appearance:textfield}
         <button data-s="0750" class="on">สาย 07.50 น.</button>
         <button data-s="0830">สาย 08.30 น.</button>
       </div>
+      <span class="sp" style="flex:1"></span>
+      <button class="btn pri big" id="btnSaveRoom">💾 บันทึกห้องนี้</button>
     </div>
     <div class="rooms" id="rooms"></div>
     <div class="row" style="margin-bottom:8px">
@@ -158,6 +167,7 @@ input.num,input.base{-moz-appearance:textfield}
       </label>
       <button class="btn pri" id="btnDocx">⬇ ดาวน์โหลด Word (.docx)</button>
       <button class="btn" id="btnDocxBoth">⬇ ทั้ง 2 ช่วงเวลา</button>
+      <button class="btn" id="btnPdf">📄 บันทึกเป็น PDF</button>
       <button class="btn" id="btnPrint">🖨 พิมพ์</button>
     </div>
     <p class="hint" id="sumInfo"></p>
@@ -214,6 +224,14 @@ input.num,input.base{-moz-appearance:textfield}
 <!-- ===== TAB: DATA ===== -->
 <section id="tab-data" hidden>
   <div class="card">
+    <div class="row" style="align-items:center">
+      <h3 style="margin:0">บันทึกข้อมูลทั้งหมด</h3>
+      <span class="hint" id="allInfo" style="margin:0"></span>
+      <span class="sp" style="flex:1"></span>
+      <button class="btn pri big" id="btnSaveAll">💾 บันทึกทุกห้อง</button>
+    </div>
+  </div>
+  <div class="card">
     <h3 style="margin:0 0 8px">ผู้ลงนามท้ายเอกสาร</h3>
     <div class="row" style="margin-bottom:8px">
       <label class="f">คนที่ 1 — ชื่อ<input type="text" id="sg0name" style="width:250px"></label>
@@ -265,9 +283,10 @@ input.num,input.base{-moz-appearance:textfield}
 </section>
 
 </main>
+<div id="toast"></div>
 <!-- ?v= คือกันเบราว์เซอร์จำไฟล์เก่า — ถ้าอัปเดตรายชื่อใหม่ ให้เปลี่ยนเลขนี้ด้วย -->
-<script src="students.js?v=2569-1b"></script>
-<script src="baseline.js?v=2569-1b"></script>
-<script src="app.js?v=2569-1b"></script>
+<script src="students.js?v=2569-1c"></script>
+<script src="baseline.js?v=2569-1c"></script>
+<script src="app.js?v=2569-1c"></script>
 </body>
 </html>
