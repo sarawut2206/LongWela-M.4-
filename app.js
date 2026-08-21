@@ -3,7 +3,7 @@
    ข้อมูลเก็บใน localStorage และส่งออกเป็นไฟล์ Word (.docx) ตามฟอร์มโรงเรียน
    ========================================================================== */
 
-const KEY = 'malaisai_m4_v1';
+const KEY = 'malaisai_m4_v2';
 const SESS = { '0750': '07.50', '0830': '08.30' };
 const DAYNAME = ['จ', 'อ', 'พ', 'พฤ', 'ศ'];
 const TH_MONTH = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
@@ -12,36 +12,54 @@ const TH_MONTH = ['มกราคม', 'กุมภาพันธ์', 'ม�
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 
+/* ลิงก์ Apps Script (Google Sheet) — เปลี่ยนได้ในแท็บ "ข้อมูล / สำรอง" */
+const GS_URL_DEFAULT =
+  'https://script.google.com/macros/s/AKfycbxykvR2ZPolzozxvtT1uDxsbsqSHMsNTPU9WiGPW5rgJmsoUgIBWUhvMmiqo-Tj3Bojag/exec';
+
 /* ---------- state ---------- */
 let S = load();
 
+function baselineCarry() {
+  const B = window.BASELINE || {};
+  return { '0750': Object.assign({}, B['0750']), '0830': Object.assign({}, B['0830']) };
+}
 function blank() {
   return {
-    v: 1,
+    v: 2,
     sess: '0750',
     cur: mondayISO(new Date()),
     room: null,
     weeks: {},          // isoMonday -> { no, label, marks:{ '0750':{key:[5 bools]}, '0830':{} } }
-    carry: { '0750': {}, '0830': {} },
+    carry: baselineCarry(),   // เริ่มต้น = ยอดสะสมถึงสัปดาห์ที่ 12 จากไฟล์ Word เดิม
     roster: null,       // null = ใช้รายชื่อจาก students.js
+    cloud: { url: GS_URL_DEFAULT, auto: true, rev: 0, at: '' },
     meta: {
-      signer: 'นางมานิดา ยอดเมือง',
-      position: 'รองหัวหน้าระดับชั้นมัธยมศึกษาปีที่ 4',
+      signers: [
+        { name: 'นายศราวุธ  พิมศร', pos: 'รองหัวหน้าระดับชั้นมัธยมศึกษาปีที่ 4' },
+        { name: 'นางมานิดา ยอดเมือง', pos: 'รองหัวหน้าระดับชั้นมัธยมศึกษาปีที่ 4' }
+      ],
+      who: 0,
       level: '4', thr: 4, note: true
     }
   };
 }
+function signer() { return S.meta.signers[S.meta.who] || S.meta.signers[0]; }
 function load() {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return blank();
     const s = Object.assign(blank(), JSON.parse(raw));
     s.meta = Object.assign(blank().meta, s.meta || {});
+    if (!Array.isArray(s.meta.signers) || s.meta.signers.length < 2) s.meta.signers = blank().meta.signers;
+    if (s.meta.who !== 0 && s.meta.who !== 1) s.meta.who = 0;
+    // ถ้าไฟล์ students.js ถูกอัปเดตเป็นรายชื่อชุดใหม่ ให้ทิ้งรายชื่อที่เคยแก้ไว้กับชุดเก่า
+    if (s.roster && s.rosterVer !== window.ROSTER_VERSION) { s.roster = null; s.rosterVer = null; }
     s.carry = Object.assign({ '0750': {}, '0830': {} }, s.carry || {});
+    s.cloud = Object.assign({ url: GS_URL_DEFAULT, auto: true, rev: 0, at: '' }, s.cloud || {});
     return s;
   } catch (e) { return blank(); }
 }
-function save() { localStorage.setItem(KEY, JSON.stringify(S)); }
+function save() { localStorage.setItem(KEY, JSON.stringify(S)); autoSync(); }
 
 /* ---------- helpers: วันที่ ---------- */
 function mondayISO(d) {
@@ -223,9 +241,23 @@ function qualified(sess) {
     .sort((a, b) => a.s.r - b.s.r || a.s.n - b.s.n);
 }
 
+function fillWhoSel() {
+  ['#whoSel', '#whoSel2'].forEach(sel => {
+    const el = $(sel); if (!el) return;
+    el.innerHTML = '';
+    S.meta.signers.forEach((g, i) => el.add(new Option(g.name, i)));
+    el.value = S.meta.who;
+    el.onchange = () => {
+      S.meta.who = Number(el.value) || 0; save();
+      fillWhoSel(); renderSummary();
+    };
+  });
+}
+
 function renderSummary() {
   $('#thr').value = S.meta.thr;
   $('#chkNote').checked = !!S.meta.note;
+  fillWhoSel();
   const w = week(S.cur, true);
   const rowsQ = qualified(S.sess);
   $('#sumInfo').textContent =
@@ -244,7 +276,7 @@ function renderSummary() {
   if (!rowsQ.length) h += '<tr><td colspan="6" style="color:#888">— ไม่มีนักเรียนถึงเกณฑ์ —</td></tr>';
   h += '</table>';
   h += `<div style="margin-top:18px">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;จึงเรียนมาเพื่อโปรดทราบ</div>`;
-  h += `<div class="sign">( ${S.meta.signer})<br>${S.meta.position}</div>`;
+  h += `<div class="sign">( ${signer().name})<br>${signer().pos}</div>`;
   $('#preview').innerHTML = h;
 }
 
@@ -253,6 +285,13 @@ function renderSummary() {
    ========================================================================== */
 $('#carryRoom').onchange = renderCarry;
 $('#carryQ').oninput = renderCarry;
+$('#btnBaseline').onclick = () => {
+  const B = window.BASELINE;
+  if (!B) return alert('ไม่พบไฟล์ baseline.js');
+  if (!confirm(B.label + '\n\nจะเขียนทับยอดยกมาเดิมของทั้ง 2 ช่วงเวลา ดำเนินการต่อ ?')) return;
+  S.carry = baselineCarry(); save(); renderCarry(); renderRec();
+  alert('โหลดแล้ว — ' + B.label);
+};
 $('#btnCarryClear').onclick = () => {
   if (!confirm('ล้างยอดยกมาทั้งหมดของ สาย ' + SESS[S.sess] + ' น. ?')) return;
   S.carry[S.sess] = {}; save(); renderCarry(); renderRec();
@@ -303,12 +342,13 @@ $('#btnReplace').onclick = () => {
   const list = parsePaste($('#paste').value);
   if (!list.length) return alert('ไม่พบข้อมูลที่อ่านได้');
   if (!confirm('แทนที่รายชื่อทั้งหมดด้วย ' + list.length + ' รายชื่อ ?')) return;
-  S.roster = list.sort((a, b) => a.r - b.r || a.n - b.n); save();
+  S.roster = list.sort((a, b) => a.r - b.r || a.n - b.n);
+  S.rosterVer = window.ROSTER_VERSION; save();
   $('#paste').value = ''; renderRoster(); renderRec();
 };
 $('#btnResetRoster').onclick = () => {
   if (!confirm('คืนค่ารายชื่อเริ่มต้นจากไฟล์ students.js ?')) return;
-  S.roster = null; save(); renderRoster(); renderRec();
+  S.roster = null; S.rosterVer = null; save(); renderRoster(); renderRec();
 };
 function parsePaste(txt) {
   const out = [];
@@ -328,12 +368,14 @@ function mergeRoster(list) {
     const i = cur.findIndex(s => s.r === x.r && s.n === x.n);
     if (i >= 0) cur[i].name = x.name; else cur.push(x);
   });
-  S.roster = cur.sort((a, b) => a.r - b.r || a.n - b.n); save();
+  S.roster = cur.sort((a, b) => a.r - b.r || a.n - b.n);
+  S.rosterVer = window.ROSTER_VERSION; save();
 }
 function renderRoster() {
   const rs = rooms();
   $('#rosterInfo').innerHTML = `ตอนนี้มี <b>${roster().length}</b> คน / <b>${rs.length}</b> ห้อง (ห้อง ${rs.join(', ')})` +
-    (S.roster ? ' — <b>แก้ไขแล้ว</b> (เก็บในเครื่องนี้)' : ' — รายชื่อเริ่มต้นจากไฟล์ students.js');
+    (S.roster ? ' — <b>แก้ไขเพิ่มเองแล้ว</b> (เก็บในเครื่องนี้)'
+      : ' — รายชื่อชุด <b>' + (window.ROSTER_VERSION || '-') + '</b> จากไฟล์ students.js');
   let h = '<thead><tr><th>ห้อง</th><th>เลขที่</th><th style="text-align:left">ชื่อ-สกุล</th><th></th></tr></thead><tbody>';
   roster().forEach(s => {
     h += `<tr><td>${s.r}</td><td>${s.n}</td><td class="name">${s.name}</td>` +
@@ -343,16 +385,19 @@ function renderRoster() {
   $('#tblRoster').innerHTML = h;
   $('#tblRoster').querySelectorAll('button').forEach(b => b.onclick = () => {
     const r = Number(b.dataset.r), n = Number(b.dataset.n);
-    S.roster = roster().filter(s => !(s.r === r && s.n === n)); save(); renderRoster(); renderRec();
+    S.roster = roster().filter(s => !(s.r === r && s.n === n));
+    S.rosterVer = window.ROSTER_VERSION; save(); renderRoster(); renderRec();
   });
 }
 
 /* ==========================================================================
    หน้า 5 : ข้อมูล / สำรอง
    ========================================================================== */
-['signer', 'position', 'level'].forEach(f => $('#' + f).oninput = () => {
-  S.meta[f] = $('#' + f).value; save();
-});
+$('#level').oninput = () => { S.meta.level = $('#level').value; save(); };
+[['#sg0name', 0, 'name'], ['#sg0pos', 0, 'pos'], ['#sg1name', 1, 'name'], ['#sg1pos', 1, 'pos']]
+  .forEach(([sel, i, f]) => $(sel).oninput = () => {
+    S.meta.signers[i][f] = $(sel).value; save(); fillWhoSel();
+  });
 $('#btnExport').onclick = () => {
   downloadBlob(new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }),
     'สำรองข้อมูลมาสาย-' + iso(new Date()) + '.json');
@@ -377,7 +422,13 @@ $('#btnWipe').onclick = () => {
   localStorage.removeItem(KEY); S = blank(); boot();
 };
 function renderData() {
-  $('#signer').value = S.meta.signer; $('#position').value = S.meta.position; $('#level').value = S.meta.level;
+  $('#sg0name').value = S.meta.signers[0].name; $('#sg0pos').value = S.meta.signers[0].pos;
+  $('#sg1name').value = S.meta.signers[1].name; $('#sg1pos').value = S.meta.signers[1].pos;
+  $('#level').value = S.meta.level;
+  $('#gsUrl').value = S.cloud.url || '';
+  $('#chkAuto').checked = !!S.cloud.auto;
+  if (S.cloud.at) setCloudInfo('ซิงก์ล่าสุด ' + S.cloud.at + ' • rev ' + S.cloud.rev, '☁ พร้อม');
+  fillWhoSel();
   let h = '<thead><tr><th>สัปดาห์ที่</th><th>ช่วงวันที่</th><th>สาย 07.50</th><th>สาย 08.30</th><th></th></tr></thead><tbody>';
   weekList().forEach(k => {
     const w = S.weeks[k];
@@ -399,6 +450,182 @@ function renderData() {
     save(); renderData(); renderRec();
   });
 }
+
+/* ==========================================================================
+   ☁ ซิงก์กับ Google Sheet (ผ่าน Apps Script /exec)
+   - อ่าน  : GET  ?action=load   (ถ้าเบราว์เซอร์บล็อก จะสลับไปใช้ JSONP อัตโนมัติ)
+   - เขียน : POST {action:'save', data, baseRev}
+   ========================================================================== */
+let syncTimer = null, syncing = false, ready = false;
+
+function cloudUrl() { return (S.cloud && S.cloud.url || '').trim(); }
+
+function setCloudInfo(txt, cls) {
+  const el = $('#gsInfo'); if (el) el.innerHTML = txt;
+  const b = $('#hdCloud'); if (b) b.textContent = cls || txt.replace(/<[^>]*>/g, '').slice(0, 40);
+}
+
+/* อ่านข้อมูลด้วย JSONP — ใช้ได้เสมอแม้เบราว์เซอร์จะบล็อก CORS */
+function jsonp(url, timeout = 20000) {
+  return new Promise((resolve, reject) => {
+    const cb = 'gscb_' + Math.floor(performance.now() * 1000) + '_' + Math.floor(Math.random() * 1e6);
+    const sc = document.createElement('script');
+    const done = (fn, arg) => { delete window[cb]; sc.remove(); clearTimeout(tm); fn(arg); };
+    const tm = setTimeout(() => done(reject, new Error('หมดเวลารอ')), timeout);
+    window[cb] = (data) => done(resolve, data);
+    sc.onerror = () => done(reject, new Error('เรียกใช้งานลิงก์ไม่สำเร็จ'));
+    sc.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + cb;
+    document.body.appendChild(sc);
+  });
+}
+
+async function cloudGet(action) {
+  const u = cloudUrl();
+  if (!u) throw new Error('ยังไม่ได้ใส่ลิงก์ Apps Script');
+  const url = u + (u.includes('?') ? '&' : '?') + 'action=' + action + '&t=' + Math.floor(performance.now());
+  try {
+    const r = await fetch(url, { redirect: 'follow' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } catch (e) {
+    return await jsonp(url);      // สำรอง
+  }
+}
+
+async function cloudPost(payload) {
+  const u = cloudUrl();
+  if (!u) throw new Error('ยังไม่ได้ใส่ลิงก์ Apps Script');
+  try {
+    const r = await fetch(u, {
+      method: 'POST', redirect: 'follow',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },   // ไม่ให้เกิด preflight
+      body: JSON.stringify(payload)
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } catch (e) {
+    // สำรอง: ส่งแบบอ่านคำตอบไม่ได้ แล้วไปเช็คผลด้วย ping แทน
+    await fetch(u, { method: 'POST', mode: 'no-cors', body: JSON.stringify(payload) });
+    const p = await cloudGet('ping').catch(() => null);
+    if (p && p.ok) return { ok: true, rev: p.rev, blind: true };
+    throw e;
+  }
+}
+
+function stateForCloud(writeRoster) {
+  // ส่งเฉพาะชื่อของคนที่ถูกอ้างถึงจริง (แทนที่จะส่งรายชื่อทั้ง 475 คนทุกครั้ง)
+  const need = new Set();
+  Object.values(S.weeks).forEach(w => ['0750', '0830'].forEach(se =>
+    Object.keys((w.marks || {})[se] || {}).forEach(k => need.add(k))));
+  ['0750', '0830'].forEach(se => Object.keys(S.carry[se] || {}).forEach(k => need.add(k)));
+  const names = {};
+  roster().forEach(s => { const k = keyOf(s); if (need.has(k)) names[k] = s.name; });
+
+  const full = !!writeRoster || !S.cloud.rev;   // ครั้งแรกสุดค่อยส่งรายชื่อทั้งหมดขึ้นไปตั้งต้น
+  return {
+    weeks: S.weeks, carry: S.carry, meta: S.meta, names: names,
+    roster: full ? roster() : [], writeRoster: !!writeRoster
+  };
+}
+
+async function cloudPush(force, silent) {
+  if (syncing) return;
+  syncing = true;
+  $('#hdSync').disabled = true;
+  setCloudInfo('กำลังบันทึกขึ้นคลาวด์…', '☁ กำลังบันทึก…');
+  try {
+    let res = await cloudPost({ action: 'save', data: stateForCloud(), baseRev: S.cloud.rev, force: !!force });
+    if (res && res.conflict) {
+      const ok = confirm('ข้อมูลบนคลาวด์ถูกแก้ไขจากเครื่องอื่น (rev ' + res.rev + ')\n\n' +
+        'กด "ตกลง" = ทับด้วยข้อมูลในเครื่องนี้\nกด "ยกเลิก" = ไม่บันทึก (แนะนำให้กด ⬇ ดึงจากคลาวด์ ก่อน)');
+      if (!ok) { setCloudInfo('ยกเลิกการบันทึก — ข้อมูลบนคลาวด์ใหม่กว่า', '☁ ค้าง'); return; }
+      res = await cloudPost({ action: 'save', data: stateForCloud(), force: true });
+    }
+    if (!res || !res.ok) throw new Error((res && res.error) || 'บันทึกไม่สำเร็จ');
+    S.cloud.rev = res.rev || 0;
+    S.cloud.at = new Date().toLocaleString('th-TH');
+    localStorage.setItem(KEY, JSON.stringify(S));
+    setCloudInfo(`บันทึกขึ้นคลาวด์แล้ว • rev ${S.cloud.rev} • ${S.cloud.at}` +
+      (res.blind ? ' <b>(ส่งแบบไม่อ่านผลตอบกลับ — ลองกด “ดึงจากคลาวด์” เพื่อตรวจ)</b>' : ''),
+      '☁ บันทึกแล้ว');
+  } catch (e) {
+    setCloudInfo('<b style="color:#c62828">บันทึกไม่สำเร็จ:</b> ' + e.message +
+      ' — ตรวจว่า Deploy เป็น “Anyone” และลิงก์ลงท้ายด้วย /exec', '☁ ผิดพลาด');
+    if (!silent) alert('บันทึกขึ้นคลาวด์ไม่สำเร็จ\n' + e.message);
+  } finally {
+    syncing = false; $('#hdSync').disabled = false;
+  }
+}
+
+async function cloudPull() {
+  try {
+    setCloudInfo('กำลังดึงข้อมูล…', '☁ กำลังดึง…');
+    const res = await cloudGet('load');
+    if (!res || !res.ok) throw new Error((res && res.error) || 'ดึงข้อมูลไม่สำเร็จ');
+    const d = res.data || {};
+    const nWeeks = Object.keys(d.weeks || {}).length;
+    const warn = (nWeeks === 0 && weekList().length > 0)
+      ? '\n\n⚠ บนคลาวด์ยังไม่มีข้อมูลสัปดาห์เลย แต่ในเครื่องนี้มี ' + weekList().length +
+      ' สัปดาห์ — ถ้าดึงมาข้อมูลในเครื่องจะหาย\n(ถ้าต้องการเก็บของในเครื่อง ให้กดยกเลิกแล้วกด ⬆ บันทึกขึ้นคลาวด์แทน)'
+      : '';
+    if (!confirm(`ข้อมูลบนคลาวด์: ${nWeeks} สัปดาห์, รายชื่อ ${(d.roster || []).length} คน, rev ${d.rev}\n\n` +
+      'จะนำมาทับข้อมูลในเครื่องนี้ทั้งหมด ดำเนินการต่อ ?' + warn)) { setCloudInfo('ยกเลิก', '☁ พร้อม'); return; }
+    if (d.weeks) S.weeks = d.weeks;
+    if (d.carry) S.carry = Object.assign({ '0750': {}, '0830': {} }, d.carry);
+    if (d.roster && d.roster.length) { S.roster = d.roster; S.rosterVer = window.ROSTER_VERSION; }
+    if (d.meta) {
+      if (d.meta.signers && d.meta.signers.length) S.meta.signers = d.meta.signers;
+      if (d.meta.who !== null && d.meta.who !== undefined) S.meta.who = Number(d.meta.who);
+      if (d.meta.level) S.meta.level = d.meta.level;
+      if (d.meta.thr) S.meta.thr = Number(d.meta.thr);
+      if (d.meta.note !== null && d.meta.note !== undefined) S.meta.note = !!d.meta.note;
+    }
+    S.cloud.rev = d.rev || 0; S.cloud.at = new Date().toLocaleString('th-TH');
+    const ws = weekList(); if (ws.length && !S.weeks[S.cur]) S.cur = ws[ws.length - 1];
+    localStorage.setItem(KEY, JSON.stringify(S));
+    ready = false; boot(); renderData(); ready = true;
+    setCloudInfo(`ดึงข้อมูลแล้ว • ${nWeeks} สัปดาห์ • rev ${S.cloud.rev}`, '☁ ตรงกัน');
+  } catch (e) {
+    setCloudInfo('<b style="color:#c62828">ดึงข้อมูลไม่สำเร็จ:</b> ' + e.message, '☁ ผิดพลาด');
+    alert('ดึงจากคลาวด์ไม่สำเร็จ\n' + e.message);
+  }
+}
+
+function autoSync() {
+  if (!ready) return;                       // ยังไม่เปิดหน้าเสร็จ / กำลังโหลดข้อมูล
+  if (!S.cloud || !S.cloud.auto || !cloudUrl()) return;
+  clearTimeout(syncTimer);
+  setCloudInfo('มีการแก้ไข — จะบันทึกขึ้นคลาวด์ใน 5 วินาที', '☁ รอบันทึก…');
+  syncTimer = setTimeout(() => cloudPush(false, true), 5000);
+}
+
+$('#hdSync').onclick = () => cloudPush(false);
+$('#btnPush').onclick = () => cloudPush(false);
+$('#btnPull').onclick = () => cloudPull();
+$('#btnPushRoster').onclick = async () => {
+  if (!confirm('ส่งรายชื่อ ' + roster().length + ' คน ขึ้นชีต students (ทับของเดิม) ?')) return;
+  try {
+    const res = await cloudPost({ action: 'saveRoster', roster: roster() });
+    if (!res || !res.ok) throw new Error((res && res.error) || 'ส่งไม่สำเร็จ');
+    setCloudInfo('ส่งรายชื่อขึ้นชีตแล้ว ' + (res.students || roster().length) + ' คน', '☁ พร้อม');
+    alert('ส่งรายชื่อขึ้นชีตแล้ว');
+  } catch (e) { alert('ส่งรายชื่อไม่สำเร็จ\n' + e.message); }
+};
+$('#btnPing').onclick = async () => {
+  try {
+    setCloudInfo('กำลังทดสอบ…', '☁ ทดสอบ…');
+    const r = await cloudGet('ping');
+    if (!r || !r.ok) throw new Error((r && r.error) || 'ไม่ตอบกลับ');
+    setCloudInfo('เชื่อมต่อได้ • rev บนคลาวด์ = ' + r.rev, '☁ พร้อม');
+    alert('เชื่อมต่อ Google Sheet ได้ปกติ\nrev = ' + r.rev);
+  } catch (e) {
+    setCloudInfo('<b style="color:#c62828">เชื่อมต่อไม่ได้:</b> ' + e.message, '☁ ผิดพลาด');
+    alert('เชื่อมต่อไม่ได้\n' + e.message +
+      '\n\nตรวจสอบ: Deploy → Who has access = Anyone, และลิงก์ต้องลงท้าย /exec');
+  }
+};
+$('#gsUrl').oninput = () => { S.cloud.url = $('#gsUrl').value.trim(); localStorage.setItem(KEY, JSON.stringify(S)); };
+$('#chkAuto').onchange = () => { S.cloud.auto = $('#chkAuto').checked; localStorage.setItem(KEY, JSON.stringify(S)); };
 
 /* ==========================================================================
    สร้างไฟล์ Word (.docx) — เขียน OOXML + ZIP เองทั้งหมด ไม่ต้องพึ่งไลบรารีนอก
@@ -500,8 +727,8 @@ function docxXml(sess) {
   body += para('');
   body += para('จึงเรียนมาเพื่อโปรดทราบ', { tabs: 1 });
   body += para('');
-  body += para(`           ( ${S.meta.signer})`, { tabs: 8 });
-  body += para(`           ${S.meta.position}`, { tabs: 7 });
+  body += para(`           ( ${signer().name})`, { tabs: 8 });
+  body += para(`           ${signer().pos}`, { tabs: 7 });
   body += '<w:sectPr><w:pgSz w:w="11909" w:h="16834"/>' +
     '<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="431" w:footer="431" w:gutter="0"/>' +
     '<w:cols w:space="708"/><w:docGrid w:linePitch="435"/></w:sectPr>';
@@ -572,8 +799,10 @@ function downloadBlob(blob, filename) {
 function boot() {
   week(S.cur, true); save();
   $('#carryRoom').innerHTML = '';
+  if (window.BASELINE) $('#btnBaseline').textContent = '↺ โหลด' + window.BASELINE.label;
   setSess(S.sess);
   syncWeekBar();
   renderRec();
 }
 boot();
+ready = true;

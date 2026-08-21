@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>บันทึกการมาสาย ม.4</title>
+<link rel="icon" href="icon-180.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="theme-color" content="#2b59c3">
 <style>
 :root{
   --bg:#f4f6fb; --card:#fff; --line:#dfe3ec; --ink:#1e2430; --muted:#6b7385;
@@ -15,8 +18,15 @@ body{margin:0;background:var(--bg);color:var(--ink);
 header{background:var(--accent);color:#fff;padding:10px 14px;position:sticky;top:0;z-index:20;
   display:flex;flex-wrap:wrap;gap:10px;align-items:center;box-shadow:0 2px 6px rgba(0,0,0,.15)}
 header h1{font-size:22px;margin:0;font-weight:700;letter-spacing:.2px}
+header .logo{height:34px;width:auto;background:#fff;border-radius:8px;padding:2px 8px}
+header .fallback{display:none}
 header .sp{flex:1}
 .badge{background:rgba(255,255,255,.18);padding:3px 10px;border-radius:20px;font-size:16px}
+.cloudbtn{background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.45);
+  border-radius:20px;padding:3px 12px;font-family:inherit;font-size:16px;cursor:pointer}
+.cloudbtn:hover{background:rgba(255,255,255,.32)}
+.cloudbtn:disabled{opacity:.5;cursor:default}
+@media (max-width:520px){header .logo{height:28px}}
 nav{display:flex;gap:4px;background:#fff;padding:6px 10px;border-bottom:1px solid var(--line);
   position:sticky;top:47px;z-index:19;overflow-x:auto}
 nav button{border:0;background:transparent;padding:8px 14px;border-radius:8px;cursor:pointer;
@@ -74,11 +84,14 @@ td.tk{padding:3px}
 </head>
 <body>
 <header>
-  <h1>บันทึกการมาสาย ม.4</h1>
+  <img src="logo.png" alt="บันทึกการมาสาย ม.4" class="logo"
+       onerror="this.style.display='none';document.querySelector('header .fallback').style.display='block'">
+  <h1 class="fallback">บันทึกการมาสาย ม.4</h1>
   <span class="badge" id="hdWeek">สัปดาห์ที่ –</span>
   <span class="badge" id="hdSess">สาย 07.50 น.</span>
   <span class="sp"></span>
-  <span class="badge">บันทึกอัตโนมัติ</span>
+  <button class="cloudbtn" id="hdSync" title="บันทึกขึ้น Google Sheet">☁ ซิงก์</button>
+  <span class="badge" id="hdCloud">—</span>
 </header>
 <nav>
   <button data-tab="rec" class="on">① ติ๊กมาสาย</button>
@@ -129,6 +142,9 @@ td.tk{padding:3px}
       <label class="f">เกณฑ์ (ครั้งขึ้นไป)
         <input type="number" id="thr" min="1" step="1" value="4">
       </label>
+      <label class="f">ผู้ลงนาม
+        <select id="whoSel"></select>
+      </label>
       <label class="f">
         <span style="font-size:17px;color:var(--ink)"><input type="checkbox" id="chkNote" checked> ใส่บรรทัดหมายเหตุเกณฑ์</span>
       </label>
@@ -157,6 +173,7 @@ td.tk{padding:3px}
       <label class="f">ค้นหาชื่อ
         <input type="text" id="carryQ" style="width:240px">
       </label>
+      <button class="btn pri" id="btnBaseline">↺ โหลดยอดสะสมถึงสัปดาห์ที่ 12 (จากไฟล์ Word เดิม)</button>
       <button class="btn warn" id="btnCarryClear">ล้างยอดยกมาของช่วงเวลานี้</button>
     </div>
     <div class="wrap"><table id="tblCarry"></table></div>
@@ -189,15 +206,42 @@ td.tk{padding:3px}
 <!-- ===== TAB: DATA ===== -->
 <section id="tab-data" hidden>
   <div class="card">
-    <h3 style="margin:0 0 8px">ข้อความท้ายเอกสาร</h3>
+    <h3 style="margin:0 0 8px">ผู้ลงนามท้ายเอกสาร</h3>
+    <div class="row" style="margin-bottom:8px">
+      <label class="f">คนที่ 1 — ชื่อ<input type="text" id="sg0name" style="width:250px"></label>
+      <label class="f">ตำแหน่ง<input type="text" id="sg0pos" style="width:380px"></label>
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <label class="f">คนที่ 2 — ชื่อ<input type="text" id="sg1name" style="width:250px"></label>
+      <label class="f">ตำแหน่ง<input type="text" id="sg1pos" style="width:380px"></label>
+    </div>
     <div class="row">
-      <label class="f">ชื่อผู้ลงนาม<input type="text" id="signer" style="width:260px"></label>
-      <label class="f">ตำแหน่ง<input type="text" id="position" style="width:380px"></label>
+      <label class="f">ใช้ผู้ลงนาม<select id="whoSel2"></select></label>
       <label class="f">ระดับชั้น ม.<input type="text" id="level" style="width:70px"></label>
     </div>
   </div>
   <div class="card">
-    <h3 style="margin:0 0 8px">สำรอง / ย้ายข้อมูล</h3>
+    <h3 style="margin:0 0 8px">☁ ฐานข้อมูล Google Sheet</h3>
+    <p class="hint">ซิงก์ข้อมูลขึ้น Google Sheet เพื่อไม่ให้ข้อมูลผูกกับเบราว์เซอร์เครื่องเดียว
+      — เปิดจากเครื่องไหนก็กด “ดึงจากคลาวด์” แล้วทำงานต่อได้เลย</p>
+    <div class="row">
+      <label class="f" style="flex:1;min-width:320px">ลิงก์ Apps Script (/exec)
+        <input type="text" id="gsUrl" style="width:100%" placeholder="https://script.google.com/macros/s/.../exec">
+      </label>
+      <button class="btn" id="btnPing">ทดสอบการเชื่อมต่อ</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn pri" id="btnPush">⬆ บันทึกขึ้นคลาวด์</button>
+      <button class="btn" id="btnPull">⬇ ดึงจากคลาวด์</button>
+      <button class="btn" id="btnPushRoster">ส่งรายชื่อนักเรียนขึ้นชีต</button>
+      <label class="f">
+        <span style="font-size:17px;color:var(--ink)"><input type="checkbox" id="chkAuto"> ซิงก์อัตโนมัติหลังติ๊ก</span>
+      </label>
+    </div>
+    <p class="hint" id="gsInfo" style="margin-bottom:0"></p>
+  </div>
+  <div class="card">
+    <h3 style="margin:0 0 8px">สำรอง / ย้ายข้อมูล (ไฟล์)</h3>
     <p class="hint">ข้อมูลเก็บในเบราว์เซอร์เครื่องนี้ (localStorage) — ควรกด “สำรองข้อมูล” เก็บไฟล์ไว้เป็นระยะ
       และถ้าจะใช้อีกเครื่องให้ใช้ “นำเข้าข้อมูล”</p>
     <div class="row">
@@ -213,7 +257,9 @@ td.tk{padding:3px}
 </section>
 
 </main>
-<script src="students.js"></script>
-<script src="app.js"></script>
+<!-- ?v= คือกันเบราว์เซอร์จำไฟล์เก่า — ถ้าอัปเดตรายชื่อใหม่ ให้เปลี่ยนเลขนี้ด้วย -->
+<script src="students.js?v=2569-1"></script>
+<script src="baseline.js?v=2569-1"></script>
+<script src="app.js?v=2569-1"></script>
 </body>
 </html>
