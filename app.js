@@ -480,6 +480,151 @@ $('#fileImp').onchange = (e) => {
   };
   rd.readAsText(f); e.target.value = '';
 };
+/* ==========================================================================
+   📊 นำเข้าจากไฟล์ Excel (.xlsx/.xls/.csv) — ใช้ SheetJS โหลดจาก CDN เฉพาะตอนกดนำเข้า
+   รองรับ 1) ไฟล์ Google Sheet ที่ดาวน์โหลดมา (ชีต students/late/carry/meta)
+          2) ไฟล์รายชื่อ เช่น ม.4.xls (ห้อง/เลขที่/ชื่อ)
+   ========================================================================== */
+function loadSheetJS() {
+  if (window.XLSX) return Promise.resolve();
+  return new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.onload = () => res(); s.onerror = () => rej(new Error('โหลดตัวอ่าน Excel ไม่ได้ (ต้องต่ออินเทอร์เน็ตตอนนำเข้า)'));
+    document.head.appendChild(s);
+  });
+}
+const norm = (x) => String(x ?? '').replace(/\s+/g, ' ').trim();
+function normSess(v) {
+  let s = norm(v).replace(/[.:]/g, '');
+  if (!s) return '';
+  if (/^\d+$/.test(s)) s = s.padStart(4, '0');
+  return s === '0750' || s === '0830' ? s : (s.includes('830') ? '0830' : (s.includes('750') ? '0750' : ''));
+}
+function normISO(v) {
+  if (v instanceof Date && !isNaN(v)) return new Date(v.getTime() + 12 * 3600 * 1000).toISOString().slice(0, 10); // กันเวลาเพี้ยน ±11 ชม.
+  if (typeof v === 'number' && window.XLSX) { const d = XLSX.SSF.parse_date_code(v); if (d) return iso(new Date(d.y, d.m - 1, d.d)); }
+  const s = norm(v);
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/); if (m) return iso(new Date(+m[1], m[2] - 1, +m[3]));
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if (m) { let y = +m[3]; if (y > 2400) y -= 543; return iso(new Date(y, m[2] - 1, +m[1])); }
+  return '';
+}
+/* หาคอลัมน์จากชื่อหัวตาราง (รองรับหลายชื่อ) */
+function colIndex(head, names) {
+  const H = head.map(h => norm(h).toLowerCase());
+  for (const n of names) { const i = H.indexOf(n.toLowerCase()); if (i >= 0) return i; }
+  for (const n of names) { const i = H.findIndex(h => h.includes(n.toLowerCase())); if (i >= 0) return i; }
+  return -1;
+}
+function parseWorkbook(wb) {
+  const out = { weeks: {}, carry: { '0750': {}, '0830': {} }, roster: [], meta: null, found: [] };
+  wb.SheetNames.forEach(name => {
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, cellDates: false, defval: '' });
+    if (!rows.length) return;
+    let hi = rows.findIndex(r => r.some(c => norm(c) !== ''));
+    if (hi < 0) return;
+    const head = rows[hi], body = rows.slice(hi + 1).filter(r => r.some(c => norm(c) !== ''));
+    const lname = name.toLowerCase();
+
+    // ---- late : ช่วงเวลา | สัปดาห์ที่ | วันจันทร์ | ช่วงวันที่ | ห้อง | เลขที่ | ชื่อ-สกุล | จำนวนครั้ง
+    const cS = colIndex(head, ['ช่วงเวลา']), cD = colIndex(head, ['วันจันทร์']);
+    if (lname === 'late' || (cS >= 0 && cD >= 0)) {
+      const cNo = colIndex(head, ['สัปดาห์ที่']), cL = colIndex(head, ['ช่วงวันที่']), cR = colIndex(head, ['ห้อง']),
+        cN = colIndex(head, ['เลขที่']), cC = colIndex(head, ['จำนวนครั้ง', 'รวมสัปดาห์นี้', 'รวม']);
+      let n = 0;
+      body.forEach(r => {
+        const sess = normSess(r[cS]), isoW = normISO(r[cD]);
+        const cnt = Number(r[cC]) || 0, rm = Number(r[cR]), no = Number(r[cN]);
+        if (!sess || !isoW || !rm || !no) return;
+        const w = out.weeks[isoW] || (out.weeks[isoW] = { no: norm(r[cNo]), label: norm(r[cL]) || rangeLabel(isoW), marks: { '0750': {}, '0830': {} } });
+        if (!w.no && norm(r[cNo])) w.no = norm(r[cNo]);
+        if (cnt > 0) w.marks[sess][rm + '-' + no] = cnt;
+        n++;
+      });
+      out.found.push(`มาสาย ${n} แถว (${Object.keys(out.weeks).length} สัปดาห์)`);
+      return;
+    }
+    // ---- carry : ช่วงเวลา | ห้อง | เลขที่ | ชื่อ-สกุล | ยอดยกมา
+    const cY = colIndex(head, ['ยอดยกมา']);
+    if (lname === 'carry' || (cS >= 0 && cY >= 0)) {
+      const cR = colIndex(head, ['ห้อง']), cN = colIndex(head, ['เลขที่']);
+      let n = 0;
+      body.forEach(r => {
+        const sess = normSess(r[cS]), cnt = Number(r[cY]) || 0, rm = Number(r[cR]), no = Number(r[cN]);
+        if (!sess || !rm || !no || !cnt) return;
+        out.carry[sess][rm + '-' + no] = cnt; n++;
+      });
+      out.found.push(`ยอดยกมา ${n} คน`);
+      return;
+    }
+    // ---- meta : key | value
+    if (lname === 'meta') {
+      const m = {}; body.forEach(r => { if (norm(r[0])) m[norm(r[0])] = r[1]; });
+      out.meta = m; out.found.push('ค่าตั้งค่า'); return;
+    }
+    // ---- students / รายชื่อ : ห้อง(room) | เลขที่ | ชื่อ-สกุล | เลขประจำตัว
+    const cR = colIndex(head, ['ห้อง', 'room']), cN = colIndex(head, ['เลขที่', 'no']),
+      cNm = colIndex(head, ['ชื่อ-สกุล', 'ชื่อ นามสกุล', 'ชื่อ', 'name']), cId = colIndex(head, ['เลขประจำตัว', 'รหัสประจำตัว', 'รหัส', 'id']);
+    if (cR >= 0 && cN >= 0 && cNm >= 0) {
+      let n = 0;
+      body.forEach(r => {
+        const rm = Number(r[cR]), no = Number(r[cN]), nm = norm(r[cNm]);
+        if (!rm || !no || !nm) return;
+        out.roster.push({ r: rm, n: no, id: cId >= 0 ? norm(r[cId]).replace(/\.0$/, '') : '', name: nm }); n++;
+      });
+      if (n) out.found.push(`รายชื่อ ${n} คน`);
+    }
+  });
+  return out;
+}
+async function importExcelBuffer(buf, fname) {
+  await loadSheetJS();
+  const wb = XLSX.read(buf, { type: 'array', cellDates: false });
+  const p = parseWorkbook(wb);
+  const hasLate = Object.keys(p.weeks).length > 0, hasCarry = Object.keys(p.carry['0750']).length + Object.keys(p.carry['0830']).length > 0;
+  if (!hasLate && !hasCarry && !p.roster.length) throw new Error('ไม่พบข้อมูลที่รู้จักในไฟล์ (ต้องมีชีต late / carry / students หรือคอลัมน์ ห้อง-เลขที่-ชื่อ)');
+  const msgs = [];
+  if (hasLate || hasCarry) msgs.push('• ข้อมูลมาสาย + ยอดยกมา จะ "แทน" ของเดิมในเครื่องทั้งหมด');
+  if (p.roster.length) msgs.push('• รายชื่อนักเรียน ' + p.roster.length + ' คน จะ "แทน" รายชื่อเดิม');
+  if (!confirm(`ไฟล์: ${fname}\nพบ: ${p.found.join(', ')}\n\n${msgs.join('\n')}\n\nดำเนินการต่อ ?`)) return null;
+
+  if (hasLate || hasCarry) {
+    S.weeks = hasLate ? p.weeks : S.weeks;
+    S.carry = hasCarry ? p.carry : S.carry;
+    S.pending = { late: {}, carry: {} };            // ข้อมูลมาจากชีตแล้ว ไม่ต้องส่งกลับ
+    const ws = weekList(); if (ws.length) S.cur = ws[ws.length - 1];
+  }
+  if (p.roster.length) {
+    p.roster.sort((a, b) => a.r - b.r || a.n - b.n);
+    S.roster = p.roster; S.rosterVer = window.ROSTER_VERSION;
+  }
+  if (p.meta) {
+    try { const sg = JSON.parse(p.meta['signers'] || '[]'); if (sg.length >= 2) S.meta.signers = sg; } catch (e) { }
+    if (p.meta['thr']) S.meta.thr = Number(p.meta['thr']);
+    if (p.meta['level']) S.meta.level = String(p.meta['level']);
+  }
+  localStorage.setItem(KEY, JSON.stringify(S));
+  ready = false; boot(); renderData(); ready = true;
+  return p;
+}
+$('#fileXlsx').onchange = (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  $('#xlsxInfo').textContent = 'กำลังอ่าน ' + f.name + '…';
+  const rd = new FileReader();
+  rd.onload = async () => {
+    try {
+      const p = await importExcelBuffer(rd.result, f.name);
+      if (!p) { $('#xlsxInfo').textContent = 'ยกเลิก'; return; }
+      $('#xlsxInfo').innerHTML = '<b style="color:#1b7f3b">นำเข้าแล้ว:</b> ' + p.found.join(', ');
+      toast('นำเข้าจาก Excel เรียบร้อย — ' + p.found.join(', '));
+    } catch (err) {
+      $('#xlsxInfo').innerHTML = '<b style="color:#c62828">นำเข้าไม่สำเร็จ:</b> ' + err.message;
+      alert('นำเข้าไม่สำเร็จ\n' + err.message);
+    }
+  };
+  rd.readAsArrayBuffer(f); e.target.value = '';
+};
+
 $('#btnWipe').onclick = () => {
   if (!confirm('ล้างข้อมูลทั้งหมด (รวมทุกสัปดาห์) ?')) return;
   if (!confirm('ยืนยันอีกครั้ง — ข้อมูลจะหายถาวร')) return;

@@ -338,6 +338,17 @@ button.btn.saveall:hover{filter:brightness(1.08)}
       <label class="btn" style="cursor:pointer">⬆ นำเข้าข้อมูล (.json)<input type="file" id="fileImp" accept=".json" hidden></label>
       <button class="btn warn" id="btnWipe">ล้างข้อมูลทั้งหมด</button>
     </div>
+    <hr style="border:0;border-top:1px solid var(--line);margin:14px 0">
+    <h3 style="margin:0 0 6px">📊 นำเข้าจากไฟล์ Excel</h3>
+    <p class="hint">รองรับ 2 แบบ อ่านให้เองว่าเป็นไฟล์อะไร<br>
+      <b>1) ไฟล์ Google Sheet ที่ดาวน์โหลดมา</b> (ในชีตกด ไฟล์ → ดาวน์โหลด → Microsoft Excel .xlsx) —
+      จะนำข้อมูลมาสายทุกสัปดาห์ / ยอดยกมา / รายชื่อ มาแทนในเครื่องนี้ (เหมือนกด ⬇ ดึงจาก Google Sheet แต่ใช้ไฟล์แทน)<br>
+      <b>2) ไฟล์รายชื่อนักเรียน</b> เช่น <code>ม.4.xls</code> (คอลัมน์ ห้อง / เลขที่ / ชื่อ-สกุล) — จะนำมาแทนรายชื่อ</p>
+    <div class="row">
+      <label class="btn pri" style="cursor:pointer">📊 เลือกไฟล์ Excel (.xlsx / .xls / .csv)
+        <input type="file" id="fileXlsx" accept=".xlsx,.xls,.csv" hidden></label>
+      <span class="hint" id="xlsxInfo" style="margin:0"></span>
+    </div>
   </div>
   <div class="card">
     <h3 style="margin:0 0 8px">สัปดาห์ที่บันทึกไว้</h3>
@@ -348,8 +359,8 @@ button.btn.saveall:hover{filter:brightness(1.08)}
 </main>
 <div id="toast"></div>
 <!-- ?v= คือกันเบราว์เซอร์จำไฟล์เก่า — ถ้าอัปเดตรายชื่อใหม่ ให้เปลี่ยนเลขนี้ด้วย -->
-<script src="students.js?v=2569-1d"></script>
-<script src="baseline.js?v=2569-1d"></script>
-<script src="app.js?v=2569-1d"></script>
+<script src="students.js?v=2569-1e"></script>
+<script src="baseline.js?v=2569-1e"></script>
+<script src="app.js?v=2569-1e"></script>
 </body>
 </html>
