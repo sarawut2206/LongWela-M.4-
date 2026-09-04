@@ -32,6 +32,7 @@ function blank() {
     carry: baselineCarry(),   // เริ่มต้น = ยอดสะสมถึงสัปดาห์ที่ 12 จากไฟล์ Word เดิม
     roster: null,       // null = ใช้รายชื่อจาก students.js
     cloud: { url: GS_URL_DEFAULT, auto: true, rev: 0, at: '' },
+    pending: { late: {}, carry: {} },   // รายการที่แก้แล้วยังไม่ได้ส่งขึ้น Google Sheet
     meta: {
       signers: [
         { name: 'นายศราวุธ  พิมศร', pos: 'รองหัวหน้าระดับชั้นมัธยมศึกษาปีที่ 4' },
@@ -55,6 +56,7 @@ function load() {
     if (s.roster && s.rosterVer !== window.ROSTER_VERSION) { s.roster = null; s.rosterVer = null; }
     s.carry = Object.assign({ '0750': {}, '0830': {} }, s.carry || {});
     s.cloud = Object.assign({ url: GS_URL_DEFAULT, auto: true, rev: 0, at: '' }, s.cloud || {});
+    s.pending = Object.assign({ late: {}, carry: {} }, s.pending || {});
     // ข้อมูลรูปแบบเก่า (ติ๊กรายวัน 5 ช่อง) -> แปลงเป็นจำนวนครั้ง
     Object.values(s.weeks || {}).forEach(w => ['0750', '0830'].forEach(se => {
       const m = (w.marks || {})[se]; if (!m) return;
@@ -136,6 +138,7 @@ function setCount(k, n) {
   const m = marks(S.cur, S.sess);
   n = Math.max(0, Math.min(99, Math.round(Number(n) || 0)));
   if (n) m[k] = n; else delete m[k];
+  S.pending.late[S.sess + '|' + S.cur + '|' + k] = true;
   save();
 }
 function addCount(k, d) { setCount(k, weekCount(S.cur, S.sess, k) + d); }
@@ -146,6 +149,7 @@ function setPrev(k, n) {
   const carry = Math.max(0, n - fromWeeks);
   if (!S.carry[S.sess]) S.carry[S.sess] = {};
   if (carry) S.carry[S.sess][k] = carry; else delete S.carry[S.sess][k];
+  S.pending.carry[S.sess + '|' + k] = true;
   save();
 }
 
@@ -164,8 +168,9 @@ function toast(msg, bad) {
    ========================================================================== */
 $$('nav button').forEach(b => b.onclick = () => {
   $$('nav button').forEach(x => x.classList.toggle('on', x === b));
-  ['rec', 'sum', 'carry', 'roster', 'data'].forEach(t => $('#tab-' + t).hidden = (t !== b.dataset.tab));
+  ['rec', 'sum', 'dash', 'carry', 'roster', 'data'].forEach(t => $('#tab-' + t).hidden = (t !== b.dataset.tab));
   if (b.dataset.tab === 'sum') renderSummary();
+  if (b.dataset.tab === 'dash') renderDash();
   if (b.dataset.tab === 'carry') renderCarry();
   if (b.dataset.tab === 'roster') renderRoster();
   if (b.dataset.tab === 'data') renderData();
@@ -575,49 +580,74 @@ async function cloudPost(payload) {
   }
 }
 
-function stateForCloud(writeRoster) {
-  // ส่งเฉพาะชื่อของคนที่ถูกอ้างถึงจริง (แทนที่จะส่งรายชื่อทั้ง 475 คนทุกครั้ง)
-  const need = new Set();
-  Object.values(S.weeks).forEach(w => ['0750', '0830'].forEach(se =>
-    Object.keys((w.marks || {})[se] || {}).forEach(k => need.add(k))));
-  ['0750', '0830'].forEach(se => Object.keys(S.carry[se] || {}).forEach(k => need.add(k)));
-  const names = {};
-  roster().forEach(s => { const k = keyOf(s); if (need.has(k)) names[k] = s.name; });
-
-  const full = !!writeRoster || !S.cloud.rev;   // ครั้งแรกสุดค่อยส่งรายชื่อทั้งหมดขึ้นไปตั้งต้น
-  return {
-    weeks: S.weeks, carry: S.carry, meta: S.meta, names: names,
-    roster: full ? roster() : [], writeRoster: !!writeRoster
-  };
+/* ---------- สร้างแถวที่จะส่งขึ้นชีตจากรายการที่ค้าง (pending) ---------- */
+function nameOfKey(k) {
+  const s = roster().find(x => keyOf(x) === k);
+  return s ? s.name : '';
 }
+function buildUpsert(roomFilter) {
+  const rows = [], carry = [];
+  const only = (roomFilter !== null && roomFilter !== undefined) ? String(roomFilter) + '-' : null;
+  Object.keys(S.pending.late).forEach(pk => {
+    const [sess, isoW, k] = pk.split('|');
+    if (only && !k.startsWith(only)) return;
+    const w = S.weeks[isoW] || {};
+    const [r, n] = k.split('-').map(Number);
+    rows.push({ sess, iso: isoW, no: w.no || '', label: w.label || rangeLabel(isoW), r, n,
+      name: nameOfKey(k), count: weekCount(isoW, sess, k), _pk: pk });
+  });
+  Object.keys(S.pending.carry).forEach(pk => {
+    const [sess, k] = pk.split('|');
+    if (only && !k.startsWith(only)) return;
+    const [r, n] = k.split('-').map(Number);
+    carry.push({ sess, r, n, name: nameOfKey(k), count: Number(S.carry[sess]?.[k] || 0), _pk: pk });
+  });
+  return { rows, carry };
+}
+function pendingCount() { return Object.keys(S.pending.late).length + Object.keys(S.pending.carry).length; }
 
-async function cloudPush(force, silent) {
-  if (syncing) return false;
+let needResync = false;
+
+/* ⬆ ส่งรายการที่ค้างขึ้น Google Sheet (อัปเดตทีละแถว ไม่ลบของเดิมในชีต)
+   roomFilter = เลขห้อง -> ส่งเฉพาะห้องนั้น, null -> ส่งทุกห้อง */
+async function cloudPush(roomFilter, silent) {
+  if (typeof roomFilter === 'boolean') roomFilter = null;
+  if (syncing) { needResync = true; return false; }
+  const { rows, carry } = buildUpsert(roomFilter);
+  if (!rows.length && !carry.length) {
+    setCloudInfo('ไม่มีรายการค้างส่ง • ซิงก์ล่าสุด ' + (S.cloud.at || '-'), '☁ ตรงกัน');
+    return true;
+  }
   syncing = true;
   $('#hdSync').disabled = true;
-  setCloudInfo('กำลังบันทึกขึ้นคลาวด์…', '☁ กำลังบันทึก…');
+  setCloudInfo(`กำลังส่ง ${rows.length + carry.length} รายการขึ้น Google Sheet…`, '☁ กำลังส่ง…');
   try {
-    let res = await cloudPost({ action: 'save', data: stateForCloud(), baseRev: S.cloud.rev, force: !!force });
-    if (res && res.conflict) {
-      const ok = confirm('ข้อมูลบนคลาวด์ถูกแก้ไขจากเครื่องอื่น (rev ' + res.rev + ')\n\n' +
-        'กด "ตกลง" = ทับด้วยข้อมูลในเครื่องนี้\nกด "ยกเลิก" = ไม่บันทึก (แนะนำให้กด ⬇ ดึงจากคลาวด์ ก่อน)');
-      if (!ok) { setCloudInfo('ยกเลิกการบันทึก — ข้อมูลบนคลาวด์ใหม่กว่า', '☁ ค้าง'); return false; }
-      res = await cloudPost({ action: 'save', data: stateForCloud(), force: true });
-    }
+    const payload = {
+      action: 'upsert',
+      rows: rows.map(({ _pk, ...x }) => x),
+      carry: carry.map(({ _pk, ...x }) => x),
+      meta: S.meta,
+      roster: S.cloud.rev ? [] : roster()          // ครั้งแรกสุดส่งรายชื่อไปตั้งต้นชีต students
+    };
+    const res = await cloudPost(payload);
     if (!res || !res.ok) throw new Error((res && res.error) || 'บันทึกไม่สำเร็จ');
-    S.cloud.rev = res.rev || 0;
-    S.cloud.at = new Date().toLocaleString('th-TH');
+    rows.forEach(x => delete S.pending.late[x._pk]);
+    carry.forEach(x => delete S.pending.carry[x._pk]);
+    S.cloud.rev = res.rev || S.cloud.rev || 1;
+    S.cloud.at = new Date().toLocaleString('th-TH', { hour12: false });
     localStorage.setItem(KEY, JSON.stringify(S));
-    setCloudInfo(`บันทึกขึ้นคลาวด์แล้ว • rev ${S.cloud.rev} • ${S.cloud.at}` +
-      (res.blind ? ' <b>(ส่งแบบไม่อ่านผลตอบกลับ — ลองกด “ดึงจากคลาวด์” เพื่อตรวจ)</b>' : ''),
-      '☁ บันทึกแล้ว');
+    const left = pendingCount();
+    setCloudInfo(`ขึ้น Google Sheet แล้ว (${rows.length + carry.length} รายการ) • ${S.cloud.at}` +
+      (left ? ` • ยังค้างอีก ${left} รายการ (ห้องอื่น)` : ''), left ? `☁ ค้าง ${left}` : '☁ บันทึกแล้ว');
     return true;
   } catch (e) {
-    setCloudInfo('<b style="color:#c62828">บันทึกไม่สำเร็จ:</b> ' + e.message +
-      ' — ตรวจว่า Deploy เป็น “Anyone” และลิงก์ลงท้ายด้วย /exec', '☁ ผิดพลาด');
-    if (!silent) alert('บันทึกขึ้นคลาวด์ไม่สำเร็จ\n' + e.message);
+    setCloudInfo('<b style="color:#c62828">ส่งขึ้นชีตไม่สำเร็จ:</b> ' + e.message +
+      ` — ข้อมูลยังอยู่ในเครื่อง (ค้างส่ง ${pendingCount()} รายการ) จะลองส่งใหม่เมื่อบันทึกครั้งถัดไป`, '☁ ค้าง ' + pendingCount());
+    if (!silent) alert('ส่งขึ้น Google Sheet ไม่สำเร็จ\n' + e.message + '\n\nข้อมูลยังอยู่ในเครื่องครบ');
+    return false;
   } finally {
     syncing = false; $('#hdSync').disabled = false;
+    if (needResync) { needResync = false; setTimeout(() => cloudPush(null, true), 300); }
   }
 }
 
@@ -628,12 +658,11 @@ async function cloudPull() {
     if (!res || !res.ok) throw new Error((res && res.error) || 'ดึงข้อมูลไม่สำเร็จ');
     const d = res.data || {};
     const nWeeks = Object.keys(d.weeks || {}).length;
-    const warn = (nWeeks === 0 && weekList().length > 0)
-      ? '\n\n⚠ บนคลาวด์ยังไม่มีข้อมูลสัปดาห์เลย แต่ในเครื่องนี้มี ' + weekList().length +
-      ' สัปดาห์ — ถ้าดึงมาข้อมูลในเครื่องจะหาย\n(ถ้าต้องการเก็บของในเครื่อง ให้กดยกเลิกแล้วกด ⬆ บันทึกขึ้นคลาวด์แทน)'
-      : '';
-    if (!confirm(`ข้อมูลบนคลาวด์: ${nWeeks} สัปดาห์, รายชื่อ ${(d.roster || []).length} คน, rev ${d.rev}\n\n` +
-      'จะนำมาทับข้อมูลในเครื่องนี้ทั้งหมด ดำเนินการต่อ ?' + warn)) { setCloudInfo('ยกเลิก', '☁ พร้อม'); return; }
+    const pend = pendingCount();
+    if (!confirm(`ข้อมูลบน Google Sheet: ${nWeeks} สัปดาห์, ยอดยกมา ${Object.keys((d.carry || {})['0750'] || {}).length} คน, รายชื่อ ${(d.roster || []).length} คน\n\n` +
+      'จะนำมาแทนข้อมูลในเครื่องนี้ทั้งหมด (ใช้ตอนเปิดจากเครื่องใหม่ หรือหลังแก้ข้อมูลในชีต) ดำเนินการต่อ ?' +
+      (pend ? `\n\n⚠ มี ${pend} รายการในเครื่องที่ยังไม่ได้ส่งขึ้นชีต จะหายไป — ถ้าไม่แน่ใจให้กด "บันทึกทุกห้อง" ก่อน` : '')))
+      { setCloudInfo('ยกเลิก', '☁ พร้อม'); return; }
     if (d.weeks) S.weeks = d.weeks;
     if (d.carry) S.carry = Object.assign({ '0750': {}, '0830': {} }, d.carry);
     if (d.roster && d.roster.length) { S.roster = d.roster; S.rosterVer = window.ROSTER_VERSION; }
@@ -644,23 +673,28 @@ async function cloudPull() {
       if (d.meta.thr) S.meta.thr = Number(d.meta.thr);
       if (d.meta.note !== null && d.meta.note !== undefined) S.meta.note = !!d.meta.note;
     }
-    S.cloud.rev = d.rev || 0; S.cloud.at = new Date().toLocaleString('th-TH');
+    S.pending = { late: {}, carry: {} };
+    S.cloud.rev = d.rev || 1; S.cloud.at = new Date().toLocaleString('th-TH', { hour12: false });
     const ws = weekList(); if (ws.length && !S.weeks[S.cur]) S.cur = ws[ws.length - 1];
     localStorage.setItem(KEY, JSON.stringify(S));
     ready = false; boot(); renderData(); ready = true;
-    setCloudInfo(`ดึงข้อมูลแล้ว • ${nWeeks} สัปดาห์ • rev ${S.cloud.rev}`, '☁ ตรงกัน');
+    setCloudInfo(`ดึงข้อมูลจากชีตแล้ว • ${nWeeks} สัปดาห์`, '☁ ตรงกัน');
+    toast('ดึงข้อมูลจาก Google Sheet มาแทนในเครื่องแล้ว');
   } catch (e) {
     setCloudInfo('<b style="color:#c62828">ดึงข้อมูลไม่สำเร็จ:</b> ' + e.message, '☁ ผิดพลาด');
-    alert('ดึงจากคลาวด์ไม่สำเร็จ\n' + e.message);
+    alert('ดึงจาก Google Sheet ไม่สำเร็จ\n' + e.message);
   }
 }
 
+/* ซิงก์อัตโนมัติ: แก้ตัวเลขปุ๊บ ส่งขึ้นชีตภายใน 1.5 วินาที */
 function autoSync() {
-  if (!ready) return;                       // ยังไม่เปิดหน้าเสร็จ / กำลังโหลดข้อมูล
-  if (!S.cloud || !S.cloud.auto || !cloudUrl()) return;
+  if (!ready) return;
+  const n = pendingCount();
+  if (!n) return;
+  if (!S.cloud || !S.cloud.auto || !cloudUrl()) { setCloudInfo(`ค้างส่ง ${n} รายการ (ปิดซิงก์อัตโนมัติ)`, '☁ ค้าง ' + n); return; }
   clearTimeout(syncTimer);
-  setCloudInfo('มีการแก้ไข — จะบันทึกขึ้นคลาวด์ใน 5 วินาที', '☁ รอบันทึก…');
-  syncTimer = setTimeout(() => cloudPush(false, true), 5000);
+  setCloudInfo(`มีการแก้ไข ${n} รายการ — กำลังส่งขึ้น Google Sheet…`, '☁ รอส่ง ' + n);
+  syncTimer = setTimeout(() => cloudPush(null, true), 1500);
 }
 
 /* สรุปยอดของห้องหนึ่งในสัปดาห์ที่กำลังบันทึก */
@@ -670,34 +704,6 @@ function roomSummary(r) {
   list.forEach(s => { const c = weekCount(S.cur, S.sess, keyOf(s)); if (c) { ppl++; times += c; } });
   return { ppl, times };
 }
-
-/* 💾 บันทึกห้องนี้ — เซฟลงเครื่อง แล้วส่งขึ้น Google Sheet (ถ้าตั้งลิงก์ไว้) */
-$('#btnSaveRoom').onclick = async () => {
-  clearTimeout(syncTimer);                       // ไม่ต้องรอซิงก์อัตโนมัติ
-  localStorage.setItem(KEY, JSON.stringify(S));
-  const s = roomSummary(S.room);
-  const head = `บันทึกห้อง ${S.room} แล้ว — สาย <b>${s.ppl}</b> คน รวม <b>${s.times}</b> ครั้ง`;
-  if (!cloudUrl()) { toast(head + ' (เก็บในเครื่อง)'); return; }
-  toast(head + ' • กำลังส่งขึ้น Google Sheet…');
-  const ok = await cloudPush(false, true);
-  toast(ok ? head + ' • ขึ้น Google Sheet แล้ว ✓'
-           : head + ' • <b>ส่งขึ้นคลาวด์ไม่สำเร็จ</b> (ข้อมูลยังอยู่ในเครื่องครบ)', !ok);
-};
-
-/* 💾 บันทึกทุกห้อง (หน้าสุดท้าย) */
-$('#btnSaveAll').onclick = async () => {
-  clearTimeout(syncTimer);
-  localStorage.setItem(KEY, JSON.stringify(S));
-  const tot = allSummary();
-  const head = `บันทึกทุกห้องแล้ว — สัปดาห์นี้ สาย <b>${tot.ppl}</b> คน รวม <b>${tot.times}</b> ครั้ง`;
-  if (!cloudUrl()) { toast(head + ' (เก็บในเครื่อง)'); return; }
-  toast(head + ' • กำลังส่งขึ้น Google Sheet…');
-  const ok = await cloudPush(false, true);
-  toast(ok ? head + ' • ขึ้น Google Sheet แล้ว ✓'
-           : head + ' • <b>ส่งขึ้นคลาวด์ไม่สำเร็จ</b> (ข้อมูลยังอยู่ในเครื่องครบ)', !ok);
-  renderData();
-};
-
 function allSummary() {
   let ppl = 0, times = 0;
   ['0750', '0830'].forEach(se => {
@@ -707,8 +713,38 @@ function allSummary() {
   return { ppl, times };
 }
 
-$('#hdSync').onclick = () => cloudPush(false);
-$('#btnPush').onclick = () => cloudPush(false);
+/* 💾 ปุ่มบันทึก — เซฟลงเครื่อง แล้วส่งรายการค้างขึ้น Google Sheet ทันที */
+async function saveAndPush(roomFilter, head) {
+  clearTimeout(syncTimer);
+  localStorage.setItem(KEY, JSON.stringify(S));
+  if (!cloudUrl()) { toast(head + ' (เก็บในเครื่อง — ยังไม่ได้ตั้งลิงก์ Google Sheet)', true); return; }
+  const n = buildUpsert(roomFilter); const cnt = n.rows.length + n.carry.length;
+  if (!cnt) { toast(head + ' • ข้อมูลตรงกับ Google Sheet อยู่แล้ว ✓'); return; }
+  toast(head + ` • กำลังส่ง ${cnt} รายการขึ้น Google Sheet…`);
+  const ok = await cloudPush(roomFilter, true);
+  toast(ok ? head + ` • ขึ้น Google Sheet แล้ว ${cnt} รายการ ✓`
+           : head + ' • <b>ส่งขึ้น Google Sheet ไม่สำเร็จ</b> (ข้อมูลยังอยู่ในเครื่อง จะส่งใหม่อัตโนมัติ)', !ok);
+  if (!$('#tab-data').hidden) renderData();
+  if ($('#tab-dash') && !$('#tab-dash').hidden) renderDash();
+}
+$('#btnSaveRoom').onclick = () => {
+  const s = roomSummary(S.room);
+  saveAndPush(S.room, `บันทึกห้อง ${S.room} — สาย <b>${s.ppl}</b> คน รวม <b>${s.times}</b> ครั้ง`);
+};
+$('#btnSaveAllRec').onclick = $('#btnSaveAll').onclick = () => {
+  const tot = allSummary();
+  saveAndPush(null, `บันทึกทุกห้อง — สัปดาห์นี้ สาย <b>${tot.ppl}</b> คน รวม <b>${tot.times}</b> ครั้ง`);
+};
+
+$('#hdSync').onclick = () => saveAndPush(null, 'ซิงก์');
+/* ส่งข้อมูลทั้งหมดในเครื่องขึ้นชีตอีกรอบ (ใช้ซ่อมกรณีชีตขาดข้อมูล) — ไม่ลบอะไรในชีต */
+$('#btnPush').onclick = () => {
+  if (!confirm('จะส่งข้อมูลมาสายทุกสัปดาห์ + ยอดยกมาทั้งหมดในเครื่องนี้ขึ้น Google Sheet อีกครั้ง\n(แถวที่มีอยู่จะถูกอัปเดต แถวที่ไม่มีจะถูกเพิ่ม ไม่ลบอะไร) ดำเนินการต่อ ?')) return;
+  Object.keys(S.weeks).forEach(isoW => ['0750', '0830'].forEach(se =>
+    Object.keys((S.weeks[isoW].marks || {})[se] || {}).forEach(k => S.pending.late[se + '|' + isoW + '|' + k] = true)));
+  ['0750', '0830'].forEach(se => Object.keys(S.carry[se] || {}).forEach(k => S.pending.carry[se + '|' + k] = true));
+  saveAndPush(null, 'ส่งข้อมูลทั้งหมด');
+};
 $('#btnPull').onclick = () => cloudPull();
 $('#btnPushRoster').onclick = async () => {
   if (!confirm('ส่งรายชื่อ ' + roster().length + ' คน ขึ้นชีต students (ทับของเดิม) ?')) return;
@@ -734,6 +770,123 @@ $('#btnPing').onclick = async () => {
 };
 $('#gsUrl').oninput = () => { S.cloud.url = $('#gsUrl').value.trim(); localStorage.setItem(KEY, JSON.stringify(S)); };
 $('#chkAuto').onchange = () => { S.cloud.auto = $('#chkAuto').checked; localStorage.setItem(KEY, JSON.stringify(S)); };
+
+/* ==========================================================================
+   ③ แดชบอร์ด — สรุปรายห้อง + แผนภูมิแท่ง (SVG วาดเอง ไม่ใช้ไลบรารี)
+   ========================================================================== */
+let dashSess = '0750', dashScope = 'week';
+$$('#segSessDash button').forEach(b => b.onclick = () => {
+  dashSess = b.dataset.s;
+  $$('#segSessDash button').forEach(x => x.classList.toggle('on', x === b));
+  renderDash();
+});
+$$('#segScope button').forEach(b => b.onclick = () => {
+  dashScope = b.dataset.scope;
+  $$('#segScope button').forEach(x => x.classList.toggle('on', x === b));
+  renderDash();
+});
+$('#btnDashPrint').onclick = () => {
+  const old = document.title;
+  const w = week(S.cur, true);
+  document.title = `แดชบอร์ดมาสาย ม.4 ${dashScope === 'week' ? 'สัปดาห์ที่ ' + (w.no || '') : 'สะสมทั้งเทอม'}`;
+  setTimeout(() => { window.print(); setTimeout(() => { document.title = old; }, 800); }, 100);
+};
+
+/* ยอดของนักเรียน 1 คน ตามช่วงเวลา/ขอบเขตที่เลือกในแดชบอร์ด */
+function dashVal(k, sess) {
+  const one = (se) => dashScope === 'week' ? weekCount(S.cur, se, k) : total(se, k, S.cur);
+  return sess === 'both' ? one('0750') + one('0830') : one(sess);
+}
+function dashStats() {
+  const thr = Number(S.meta.thr) || 4;
+  const out = rooms().map(r => {
+    const list = roster().filter(s => s.r === r);
+    let times = 0, ppl = 0, over = 0;
+    list.forEach(s => {
+      const v = dashVal(keyOf(s), dashSess);
+      if (v) { times += v; ppl++; }
+      const cum = dashSess === 'both'
+        ? total('0750', keyOf(s), S.cur) + total('0830', keyOf(s), S.cur)
+        : total(dashSess, keyOf(s), S.cur);
+      if (cum >= thr) over++;
+    });
+    return { r, times, ppl, over, size: list.length };
+  });
+  return out;
+}
+
+function renderDash() {
+  const w = week(S.cur, true);
+  const st = dashStats();
+  const sessTxt = dashSess === 'both' ? 'รวมสาย 07.50 น. และ 08.30 น.' : 'สาย ' + SESS[dashSess] + ' น.';
+  $('#dashTitle').textContent = (dashScope === 'week'
+    ? `สัปดาห์ที่ ${w.no || '–'} (${w.label})` : `สะสมทั้งเทอม ถึงสัปดาห์ที่ ${w.no || '–'}`) + ' • ' + sessTxt;
+
+  const totalTimes = st.reduce((a, x) => a + x.times, 0);
+  const totalPpl = st.reduce((a, x) => a + x.ppl, 0);
+  const totalOver = st.reduce((a, x) => a + x.over, 0);
+  const max = Math.max(0, ...st.map(x => x.times));
+  const tops = st.filter(x => x.times === max && max > 0);
+  const zeros = st.filter(x => x.times === 0);
+
+  /* ---- การ์ดตัวเลข ---- */
+  $('#dashCards').innerHTML =
+    `<div class="stat blue"><div class="l">มาสายรวมทั้งระดับ</div><div class="v">${totalTimes}</div><div class="s">ครั้ง • ${totalPpl} คน</div></div>` +
+    `<div class="stat red"><div class="l">ห้องที่สายมากที่สุด</div><div class="v">${tops.length ? tops.map(x => 'ห้อง ' + x.r).join(', ') : '–'}</div><div class="s">${max ? max + ' ครั้ง' : 'ไม่มีข้อมูล'}</div></div>` +
+    `<div class="stat green"><div class="l">ห้องที่ไม่มีใครสายเลย</div><div class="v">${zeros.length}</div><div class="s">${zeros.length ? 'ห้อง ' + zeros.map(x => x.r).join(', ') : 'ทุกห้องมีคนสาย'}</div></div>` +
+    `<div class="stat"><div class="l">ถึงเกณฑ์ ${S.meta.thr || 4} ครั้งขึ้นไป (สะสม)</div><div class="v">${totalOver}</div><div class="s">คน</div></div>`;
+
+  /* ---- แผนภูมิแท่ง (SVG) ---- */
+  const n = st.length, W = 1000, H = 360, padL = 46, padR = 16, padT = 34, padB = 44;
+  const cw = (W - padL - padR) / n, bw = Math.min(cw * 0.62, 60);
+  const ymax = Math.max(4, Math.ceil(max * 1.15));
+  const y = v => padT + (H - padT - padB) * (1 - v / ymax);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="แผนภูมิแท่งจำนวนครั้งมาสายรายห้อง">`;
+  const step = ymax <= 10 ? 2 : ymax <= 30 ? 5 : ymax <= 60 ? 10 : 20;
+  for (let v = 0; v <= ymax; v += step) {
+    svg += `<line x1="${padL}" x2="${W - padR}" y1="${y(v)}" y2="${y(v)}" stroke="#e5e9f2" stroke-width="1"/>` +
+      `<text x="${padL - 8}" y="${y(v) + 5}" text-anchor="end" font-size="14" fill="#6b7280">${v}</text>`;
+  }
+  st.forEach((x, i) => {
+    const cx = padL + cw * i + cw / 2;
+    const h = x.times ? Math.max(3, y(0) - y(x.times)) : 0;
+    const col = x.times === 0 ? '#22a55b' : (x.times === max ? '#d32f2f' : '#2b59c3');
+    svg += `<rect x="${cx - bw / 2}" y="${y(0) - h}" width="${bw}" height="${h}" rx="6" fill="${col}"/>`;
+    if (x.times === 0)
+      svg += `<text x="${cx}" y="${y(0) - 10}" text-anchor="middle" font-size="22" fill="#22a55b">✓</text>`;
+    else
+      svg += `<text x="${cx}" y="${y(x.times) - 8}" text-anchor="middle" font-size="17" font-weight="700" fill="${col}">${x.times}</text>` +
+        `<text x="${cx}" y="${y(x.times) - 8 + 0}" dy="-18" text-anchor="middle" font-size="12" fill="#6b7280">(${x.ppl} คน)</text>`;
+    svg += `<text x="${cx}" y="${H - padB + 22}" text-anchor="middle" font-size="16" font-weight="${x.times === max && max ? 700 : 400}" fill="#22303f">ห้อง ${x.r}</text>`;
+  });
+  svg += `<line x1="${padL}" x2="${W - padR}" y1="${y(0)}" y2="${y(0)}" stroke="#9aa3b2" stroke-width="1.5"/></svg>`;
+  $('#dashChart').innerHTML = svg;
+
+  /* ---- อันดับ ---- */
+  const ranked = [...st].filter(x => x.times > 0).sort((a, b) => b.times - a.times || b.ppl - a.ppl);
+  const medal = ['🥇', '🥈', '🥉'];
+  let rank = '<h3 style="margin:0 0 8px">ห้องที่สายมากที่สุด</h3>';
+  rank += ranked.length
+    ? '<ul class="rank">' + ranked.slice(0, 5).map((x, i) =>
+      `<li class="${i === 0 ? 'top' : ''}"><span class="medal">${medal[i] || (i + 1) + '.'}</span>ห้อง ${x.r}<span class="hint" style="margin:0">${x.ppl} คน</span><span class="n">${x.times} ครั้ง</span></li>`).join('') + '</ul>'
+    : '<p class="hint">ยังไม่มีข้อมูลมาสายในช่วงที่เลือก</p>';
+  rank += '<h3 style="margin:14px 0 8px">🌟 ห้องที่ไม่มีใครสายเลย</h3>';
+  rank += zeros.length
+    ? '<div>' + zeros.map(x => `<span class="pill">ห้อง ${x.r}</span>`).join('') + '</div>'
+    : '<p class="hint">ทุกห้องมีคนสายอย่างน้อย 1 คน</p>';
+  $('#dashRank').innerHTML = rank;
+
+  /* ---- ตาราง ---- */
+  let h = '<thead><tr><th>ห้อง</th><th>นักเรียน</th><th>คนที่สาย</th><th>จำนวนครั้ง</th><th>ถึงเกณฑ์ (สะสม)</th><th style="text-align:left">สถานะ</th></tr></thead><tbody>';
+  st.forEach(x => {
+    const cls = x.times === 0 ? '' : (x.times === max ? 'over' : '');
+    const status = x.times === 0 ? '<span style="color:#1b7f3b;font-weight:700">✓ ไม่มีคนสาย</span>'
+      : (x.times === max ? '<span style="color:#c62828;font-weight:700">สายมากที่สุด</span>' : '');
+    h += `<tr class="${cls}"><td>${x.r}</td><td>${x.size}</td><td>${x.ppl || ''}</td><td class="tot ${x.times === max && max ? 'hi' : ''}">${x.times || ''}</td><td>${x.over || ''}</td><td style="text-align:left">${status}</td></tr>`;
+  });
+  h += `<tr style="font-weight:700;background:#f4f6fb"><td>รวม</td><td>${st.reduce((a, x) => a + x.size, 0)}</td><td>${totalPpl}</td><td>${totalTimes}</td><td>${totalOver}</td><td></td></tr></tbody>`;
+  $('#dashTable').innerHTML = h;
+}
 
 /* ==========================================================================
    สร้างไฟล์ Word (.docx) — เขียน OOXML + ZIP เองทั้งหมด ไม่ต้องพึ่งไลบรารีนอก

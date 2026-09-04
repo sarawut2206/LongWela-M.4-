@@ -88,7 +88,30 @@ button.btn.big{font-size:20px;padding:9px 18px}
 #toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
 #toast.bad{background:#a32020}
 @page{size:A4;margin:2.54cm}
+.savegrp{display:flex;gap:8px;flex-wrap:wrap}
+button.btn.saveall{background:#0f766e;color:#fff;border-color:#0f766e}
+button.btn.saveall:hover{filter:brightness(1.08)}
+/* ---- แดชบอร์ด ---- */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:14px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;position:relative;overflow:hidden}
+.stat .l{font-size:15px;color:var(--muted)}
+.stat .v{font-size:34px;font-weight:700;line-height:1.15;margin-top:2px}
+.stat .s{font-size:15px;color:var(--muted)}
+.stat.red{border-color:#f3b4b4;background:#fff5f5}.stat.red .v{color:#c62828}
+.stat.green{border-color:#b7e2c8;background:#f2fbf5}.stat.green .v{color:#1b7f3b}
+.stat.blue .v{color:var(--accent)}
+.dash2{display:grid;grid-template-columns:1fr 1.4fr;gap:14px}
+@media (max-width:820px){.dash2{grid-template-columns:1fr}}
+#dashChart svg{width:100%;height:auto;display:block;font-family:inherit}
+.rank{list-style:none;padding:0;margin:0}
+.rank li{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:9px;margin-bottom:6px;font-size:18px}
+.rank li .medal{font-size:24px;width:32px;text-align:center}
+.rank li .n{margin-left:auto;font-weight:700;font-size:22px}
+.rank li.top{background:#fff0f0;border:1px solid #f3c4c4}
+.rank li.zero{background:#eefbf2;border:1px solid #bfe8cd}
+.pill{display:inline-block;padding:4px 12px;border-radius:20px;background:#eefbf2;border:1px solid #bfe8cd;color:#1b7f3b;font-weight:700;margin:3px 4px 3px 0;font-size:18px}
 @media print{
+  #dashChart svg{max-height:420px}
   header,nav,.noprint{display:none!important}
   body{background:#fff;font-size:16pt}
   main{padding:0;max-width:none}
@@ -111,6 +134,7 @@ button.btn.big{font-size:20px;padding:9px 18px}
 <nav>
   <button data-tab="rec" class="on">① บันทึกมาสาย</button>
   <button data-tab="sum">② สรุป &amp; พิมพ์ Word</button>
+  <button data-tab="dash">③ แดชบอร์ด</button>
   <button data-tab="carry">ยอดยกมา</button>
   <button data-tab="roster">รายชื่อนักเรียน</button>
   <button data-tab="data">ข้อมูล / สำรอง</button>
@@ -135,7 +159,10 @@ button.btn.big{font-size:20px;padding:9px 18px}
         <button data-s="0830">สาย 08.30 น.</button>
       </div>
       <span class="sp" style="flex:1"></span>
-      <button class="btn pri big" id="btnSaveRoom">💾 บันทึกห้องนี้</button>
+      <div class="savegrp">
+        <button class="btn pri big" id="btnSaveRoom">💾 บันทึกห้องนี้</button>
+        <button class="btn big saveall" id="btnSaveAllRec">💾 บันทึกทุกห้อง</button>
+      </div>
     </div>
     <div class="rooms" id="rooms"></div>
     <div class="row" style="margin-bottom:8px">
@@ -176,6 +203,42 @@ button.btn.big{font-size:20px;padding:9px 18px}
 </section>
 
 <!-- ===== TAB: CARRY ===== -->
+<section id="tab-dash" hidden>
+  <div class="card">
+    <div class="row" style="align-items:center">
+      <h3 style="margin:0">แดชบอร์ดการมาสาย ม.4</h3>
+      <div class="seg" id="segSessDash">
+        <button data-s="0750" class="on">สาย 07.50 น.</button>
+        <button data-s="0830">สาย 08.30 น.</button>
+        <button data-s="both">รวม 2 ช่วง</button>
+      </div>
+      <div class="seg" id="segScope">
+        <button data-scope="week" class="on">สัปดาห์นี้</button>
+        <button data-scope="all">สะสมทั้งเทอม</button>
+      </div>
+      <span class="sp" style="flex:1"></span>
+      <button class="btn" id="btnDashPrint">📄 พิมพ์ / PDF</button>
+    </div>
+    <p class="hint" id="dashTitle" style="margin:6px 0 0"></p>
+  </div>
+
+  <div class="cards" id="dashCards"></div>
+
+  <div class="card">
+    <h3 style="margin:0 0 4px">จำนวนครั้งที่มาสาย แยกรายห้อง</h3>
+    <p class="hint" style="margin:0 0 8px">แท่งสีแดง = ห้องที่สายมากที่สุด • สีเขียว = ไม่มีใครสายเลย • ตัวเลขบนแท่ง = จำนวนครั้ง (ในวงเล็บ = จำนวนคน)</p>
+    <div class="wrap" id="dashChart"></div>
+  </div>
+
+  <div class="dash2">
+    <div class="card" id="dashRank"></div>
+    <div class="card">
+      <h3 style="margin:0 0 8px">ตารางสรุปรายห้อง</h3>
+      <div class="wrap"><table id="dashTable"></table></div>
+    </div>
+  </div>
+</section>
+
 <section id="tab-carry" hidden>
   <div class="card">
     <p class="hint">ใส่ “ยอดสะสมเดิม” ของนักเรียนที่มาสายมาก่อนเริ่มใช้โปรแกรมนี้ (เช่น ยอดถึงสัปดาห์ที่ 12 จากสมุดบันทึก)
@@ -257,11 +320,11 @@ button.btn.big{font-size:20px;padding:9px 18px}
       <button class="btn" id="btnPing">ทดสอบการเชื่อมต่อ</button>
     </div>
     <div class="row" style="margin-top:8px">
-      <button class="btn pri" id="btnPush">⬆ บันทึกขึ้นคลาวด์</button>
-      <button class="btn" id="btnPull">⬇ ดึงจากคลาวด์</button>
+      <button class="btn" id="btnPush">⬆ ส่งข้อมูลทั้งหมดขึ้นชีต (ซ่อมข้อมูล)</button>
+      <button class="btn" id="btnPull">⬇ ดึงจาก Google Sheet มาแทนในเครื่อง</button>
       <button class="btn" id="btnPushRoster">ส่งรายชื่อนักเรียนขึ้นชีต</button>
       <label class="f">
-        <span style="font-size:17px;color:var(--ink)"><input type="checkbox" id="chkAuto"> ซิงก์อัตโนมัติหลังติ๊ก</span>
+        <span style="font-size:17px;color:var(--ink)"><input type="checkbox" id="chkAuto"> ส่งขึ้นชีตอัตโนมัติทันทีที่แก้ตัวเลข</span>
       </label>
     </div>
     <p class="hint" id="gsInfo" style="margin-bottom:0"></p>
@@ -285,8 +348,8 @@ button.btn.big{font-size:20px;padding:9px 18px}
 </main>
 <div id="toast"></div>
 <!-- ?v= คือกันเบราว์เซอร์จำไฟล์เก่า — ถ้าอัปเดตรายชื่อใหม่ ให้เปลี่ยนเลขนี้ด้วย -->
-<script src="students.js?v=2569-1c"></script>
-<script src="baseline.js?v=2569-1c"></script>
-<script src="app.js?v=2569-1c"></script>
+<script src="students.js?v=2569-1d"></script>
+<script src="baseline.js?v=2569-1d"></script>
+<script src="app.js?v=2569-1d"></script>
 </body>
 </html>

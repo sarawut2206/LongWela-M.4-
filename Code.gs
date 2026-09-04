@@ -81,12 +81,96 @@ function doPost(e) {
   var b = body_(e);
   var action = b.action || (e && e.parameter && e.parameter.action) || '';
   try {
+    if (action === 'upsert') return json_(upsert_(b));           // อัปเดตทีละแถว ไม่ลบของเดิม
     if (action === 'save') return json_(saveAll_(b.data, b.baseRev, b.force));
     if (action === 'saveRoster') return json_(saveRoster_(b.roster));
     if (action === 'load') return json_({ ok: true, data: loadAll_() });
     return json_({ ok: false, error: 'ไม่รู้จักคำสั่ง: ' + action });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
+  }
+}
+
+/* ===========================================================================
+   upsert — อัปเดต/เพิ่มเฉพาะแถวที่ส่งมา (ของเดิมในชีตไม่ถูกลบ)
+   ใช้เป็นทางหลักของโปรแกรม: ติ๊กเสร็จกดบันทึก แล้วขึ้นชีตทันที
+   ถ้าจะลบข้อมูล ให้ลบแถวในชีตเอง
+   payload: { rows:[{sess,iso,no,label,r,n,name,count}], carry:[{sess,r,n,name,count}], meta:{} }
+   =========================================================================== */
+function upsert_(b) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(25000)) return { ok: false, error: 'ระบบกำลังบันทึกรายการอื่นอยู่ ลองใหม่อีกครั้ง' };
+  try {
+    var res = { ok: true, updated: 0, added: 0, carryUpdated: 0, carryAdded: 0 };
+
+    // ---------- late ----------
+    var rows = b.rows || [];
+    if (rows.length) {
+      var sh = sheet_(SH_LATE, HEAD_LATE);
+      var v = sh.getDataRange().getValues();
+      var idx = {}, i;
+      for (i = 1; i < v.length; i++) {
+        var d = v[i][2];
+        if (d instanceof Date) d = Utilities.formatDate(d, ss_().getSpreadsheetTimeZone(), 'yyyy-MM-dd');
+        idx[String(v[i][0]) + '|' + String(d).slice(0, 10) + '|' + v[i][4] + '|' + v[i][5]] = i + 1;  // เลขแถวจริง
+      }
+      var add = [];
+      rows.forEach(function (r) {
+        var line = [r.sess, r.no || '', r.iso, r.label || '', Number(r.r), Number(r.n), r.name || '', Number(r.count || 0)];
+        var at = idx[r.sess + '|' + r.iso + '|' + Number(r.r) + '|' + Number(r.n)];
+        if (at) { sh.getRange(at, 1, 1, HEAD_LATE.length).setValues([line]); res.updated++; }
+        else if (Number(r.count) > 0) { add.push(line); res.added++; }   // ค่า 0 ที่ยังไม่มีแถว ไม่ต้องเพิ่ม
+      });
+      if (add.length) {
+        var start = sh.getLastRow() + 1;
+        sh.getRange(start, 3, add.length, 1).setNumberFormat('@');   // คอลัมน์วันที่เก็บเป็นข้อความ
+        sh.getRange(start, 1, add.length, HEAD_LATE.length).setValues(add);
+      }
+    }
+
+    // ---------- carry (ยอดยกมา) ----------
+    var cs = b.carry || [];
+    if (cs.length) {
+      var shC = sheet_(SH_CARRY, HEAD_CARRY);
+      var vc = shC.getDataRange().getValues();
+      var idxC = {};
+      for (var j = 1; j < vc.length; j++) idxC[String(vc[j][0]) + '|' + vc[j][1] + '|' + vc[j][2]] = j + 1;
+      var addC = [];
+      cs.forEach(function (c) {
+        var line = [c.sess, Number(c.r), Number(c.n), c.name || '', Number(c.count || 0)];
+        var at = idxC[c.sess + '|' + Number(c.r) + '|' + Number(c.n)];
+        if (at) { shC.getRange(at, 1, 1, HEAD_CARRY.length).setValues([line]); res.carryUpdated++; }
+        else if (Number(c.count) > 0) { addC.push(line); res.carryAdded++; }
+      });
+      if (addC.length) shC.getRange(shC.getLastRow() + 1, 1, addC.length, HEAD_CARRY.length).setValues(addC);
+    }
+
+    // ---------- students (เขียนให้ครั้งแรกที่ชีตยังว่าง) ----------
+    if (b.roster && b.roster.length) {
+      var shS = sheet_(SH_STUDENTS, HEAD_STUDENTS);
+      if (shS.getLastRow() < 2) {
+        writeRows_(SH_STUDENTS, HEAD_STUDENTS, b.roster.map(function (s) { return [s.r, s.n, s.id || '', s.name]; }));
+        res.students = b.roster.length;
+      }
+    }
+
+    // ---------- meta ----------
+    var m = b.meta || {};
+    var rev = getRev_() + 1;
+    var prev = metaMap_();
+    writeMeta_({
+      rev: rev,
+      updatedAt: Utilities.formatDate(new Date(), ss_().getSpreadsheetTimeZone(), 'yyyy-MM-dd HH:mm:ss'),
+      signers: m.signers ? JSON.stringify(m.signers) : (prev['signers'] || '[]'),
+      who: m.who === undefined ? (prev['who'] || 0) : m.who,
+      level: m.level || prev['level'] || '4',
+      thr: m.thr || prev['thr'] || 4,
+      note: m.note === undefined ? (prev['note'] || 'true') : (m.note ? 'true' : 'false')
+    });
+    res.rev = rev;
+    return res;
+  } finally {
+    lock.releaseLock();
   }
 }
 
